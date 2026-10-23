@@ -319,7 +319,8 @@ def main():
     if args.ls or not args.files:
         for path, size in sorted(existing.items(), key=lambda kv: kv[0].lower()):
             print(f"{size / 1e6:8.1f} MB  {path}")
-        print(f"\nCore2 is in {'WiFi' if mode == 'wifi' else 'Bluetooth'} mode" + (f" at http://{ip}" if ip else ""))
+        version = command(s, "VER", "VER").split()[1]
+        print(f"\nTiny Tunes {version}, in {'WiFi' if mode == 'wifi' else 'Bluetooth'} mode" + (f" at http://{ip}" if ip else ""))
         return
 
     use_http = mode == "wifi" and ip and not args.usb

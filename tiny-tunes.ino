@@ -28,6 +28,14 @@
 #define CORE2_WIFI 0
 #endif
 
+// Build version, written by flash.sh: VERSION file + build number + commit (e.g. 0.1.0+14.a1b2c3d).
+#if __has_include("version.h")
+#include "version.h"
+#endif
+#ifndef TT_VERSION
+#define TT_VERSION "dev"
+#endif
+
 #include <SD.h>
 #include <Preferences.h>
 #include <esp_ota_ops.h>
@@ -436,6 +444,7 @@ summary b{flex:1}.cur>summary{background:var(--row)}
 <div id="pods"></div>
 
 <div class="ctl" style="margin-top:28px"><button onclick="if(confirm('Reboot into Bluetooth mode? This page stops working until you switch back.'))cmd('btmode')">Switch to Bluetooth mode</button></div>
+<p class="dim" id="ver" style="text-align:center"></p>
 <script>
 const $=id=>document.getElementById(id), q=encodeURIComponent;
 let lib={root:'/',albums:[]};
@@ -446,6 +455,7 @@ const dirOf=p=>p.slice(0,p.lastIndexOf('/'))||'/', join=(d,n)=>(d=='/'?'':d)+'/'
 function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
 async function refreshNow(){const s=await (await fetch('/state')).json();
+ if(s.version)$('ver').textContent='Tiny Tunes '+s.version;
  $('now').textContent=s.tracks.length?(s.paused?'Paused: ':'Playing: ')+(s.tracks[s.current]||'')+' — '+s.album+'  (vol '+s.volume+'%)':'Nothing playing';
  return s}
 async function cmd(c){await post('/cmd?c='+c);refreshNow();if(/album|track/.test(c))setTimeout(loadLib,300)}
@@ -1039,7 +1049,8 @@ static void setupWeb() {
   web.on("/state", HTTP_GET, [] {
     String albumName = playAlbum >= 0 ? albums[playAlbum].name : "";
     String j = "{\"current\":" + String(current) + ",\"paused\":" + (paused ? "true" : "false") +
-               ",\"volume\":" + String(volLevel * 10) + ",\"album\":\"" + jsonEscape(albumName) + "\",\"tracks\":[";
+               ",\"volume\":" + String(volLevel * 10) + ",\"version\":\"" TT_VERSION "\",\"album\":\"" + jsonEscape(albumName) +
+               "\",\"tracks\":[";
     for (size_t i = 0; i < tracks.size(); i++) {
       if (i) j += ',';
       j += "\"" + jsonEscape(trackTitle(tracks[i], playAlbum)) + "\"";
@@ -2896,9 +2907,9 @@ static String bytesText(uint64_t b) {
   return String((uint32_t)(b / 1000)) + " KB";
 }
 
-static void drawStatTile(int col, int row, const String& label, const String& value, uint16_t accent) {
+static void drawStatTile(int col, int row, const String& label, const String& value, uint16_t accent, bool wide = false) {
   auto& d = M5.Display;
-  int x = 6 + col * 157, y = GU_BODY_Y + row * 36, w = 151, h = 33;
+  int x = 6 + col * 157, y = GU_BODY_Y + row * 36, w = wide ? 308 : 151, h = 33;
   d.fillRoundRect(x, y, w, h, 8, C_ROW);
   d.fillRoundRect(x, y, 4, h, 2, accent);
   d.setTextDatum(top_left);
@@ -2937,9 +2948,7 @@ static void drawStats() {
     drawStatTile(1, 1, "UPTIME", duration(millis() / 1000), C_BLUE);
     drawStatTile(0, 2, "SD CARD", bytesText(sdUsed) + " of " + bytesText(sdTotal), rgb(138, 80, 236));
     drawStatTile(1, 2, "LIBRARY", String(albums.size()) + " albums, " + String(songCountCache) + " songs", rgb(255, 70, 160));
-    drawStatTile(0, 3, "MEMORY FREE", String(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024) + " KB + " +
-                 fixed(ESP.getFreePsram() / 100000, 10, 1) + " MB PSRAM", C_BLUE);
-    drawStatTile(1, 3, "FIRMWARE", String(CORE2_WIFI ? "WiFi" : "Bluetooth") + " mode, " + String(__DATE__).substring(0, 6), C_DIM);
+    drawStatTile(0, 3, "VERSION", String(TT_VERSION) + (CORE2_WIFI ? "  (WiFi mode)" : "  (Bluetooth mode)"), C_GREEN, true);
   } else if (statsPage == 1) {  // the kids
     drawStatTile(0, 0, "LISTENING TIME", duration(listenSec), C_GREEN);
     drawStatTile(1, 0, "SONGS PLAYED", String(songsPlayed), C_GREEN);
@@ -2965,6 +2974,8 @@ static void drawStats() {
     drawStatTile(1, 1, "PSRAM", fixed(ESP.getPsramSize() / 100000, 10, 1) + " MB total", C_DIM);
     drawStatTile(0, 2, "FIRMWARE SIZE", fixed(ESP.getSketchSize() / 100000, 10, 1) + " MB", C_DIM);
     drawStatTile(1, 2, "BUILT", String(__DATE__) + " " + String(__TIME__).substring(0, 5), C_DIM);
+    drawStatTile(0, 3, "MEMORY FREE", String(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024) + " KB + " +
+                 fixed(ESP.getFreePsram() / 100000, 10, 1) + " MB PSRAM", C_BLUE, true);
   }
   for (int p = 0; p < 3; p++) d.fillCircle(144 + p * 16, 236, 3, p == statsPage ? C_WHITE : C_DIM);
 }
@@ -3408,7 +3419,8 @@ static void handleSerial() {
   if (!Serial.available()) return;
   String line = Serial.readStringUntil('\n');
   line.trim();
-  if (line == "PING") {
+  if (line == "VER") Serial.printf("VER %s %s\n", TT_VERSION, CORE2_WIFI ? "wifi" : "bt");
+  else if (line == "PING") {
 #if CORE2_WIFI
     if (WiFi.status() == WL_CONNECTED) Serial.printf("PONG wifi %s\n", WiFi.localIP().toString().c_str());
     else Serial.println("PONG wifi");
@@ -3523,7 +3535,7 @@ void setup() {
   rescanLibrary();
   prepareCovers();
   M5.Display.fillScreen(C_BG);
-  Serial.printf("READY %s %u albums\n", CORE2_WIFI ? "wifi" : "bt", (unsigned)albums.size());
+  Serial.printf("READY %s %u albums %s\n", CORE2_WIFI ? "wifi" : "bt", (unsigned)albums.size(), TT_VERSION);
 
 #if CORE2_WIFI
   setupWeb();
