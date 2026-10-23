@@ -1469,6 +1469,7 @@ static void showVolumeOverlay();
 static void setVolLevel(int lvl) {
   volLevel = constrain(lvl, 0, 10);
   applyVolume();
+  dirtyHeader = true;  // the top-bar volume meter
   showVolumeOverlay();
 }
 
@@ -1758,22 +1759,26 @@ static std::vector<String> wrapText(const String& text, int w, int maxLines) {
   return lines;
 }
 
-// Draws centered, wrapped text with a 1 px shadow, picking the biggest font that fits.
+// Draws centered, wrapped text with a 1 px shadow, picking the biggest font where
+// every word fits whole (too many lines or a word too wide both mean "smaller").
 static void drawTitle(const String& text, int cx, int cy, int w, int h, uint16_t fg, bool small = false) {
   auto& d = M5.Display;
-  const lgfx::IFont* big[] = {&fonts::FreeSansBold18pt7b, &fonts::FreeSansBold12pt7b, &fonts::FreeSansBold9pt7b};
-  const lgfx::IFont* little[] = {&fonts::FreeSansBold12pt7b, &fonts::FreeSansBold9pt7b};
+  const lgfx::IFont* big[] = {&fonts::FreeSansBold18pt7b, &fonts::FreeSansBold12pt7b, &fonts::FreeSansBold9pt7b, &fonts::DejaVu12};
+  const lgfx::IFont* little[] = {&fonts::FreeSansBold12pt7b, &fonts::FreeSansBold9pt7b, &fonts::DejaVu12};
   auto* list = small ? little : big;
-  int count = small ? 2 : 3;
+  int count = small ? 3 : 4;
+  auto letters = [](const String& t) { int n = 0; for (char c : t) n += c != ' '; return n; };
+  int want = letters(text);
   std::vector<String> lines;
   int lh = 0;
   for (int f = 0; f < count; f++) {
     d.setFont(list[f]);
     lh = d.fontHeight();
     lines = wrapText(text, w, std::max(1, h / lh));
+    int got = 0;
     bool fits = true;
-    for (auto& l : lines) fits &= !l.endsWith("...");
-    if (fits) break;
+    for (auto& l : lines) { fits &= !l.endsWith("..."); got += letters(l); }
+    if (fits && got == want) break;  // nothing cut off
   }
   d.setTextDatum(middle_center);
   int y0 = cy - (int)(lines.size() - 1) * lh / 2;
@@ -1853,6 +1858,80 @@ static void iconArrow(int x, int y, int dir, uint16_t c) {  // dir: 0 left, 1 ri
 // which can stay above 4 V for a while after unplugging.
 static bool usbPower() { return M5.Power.Axp192.isVBUS(); }
 
+// Volume lives in the top bar on every screen: a speaker and a 3-bar meter. Tapping
+// it opens a big volume panel over whatever is showing (closes after 3 s or a tap
+// outside). Holding the top bar still opens grown-ups.
+static constexpr int VOL_ICON_X = 212, VOL_TAP_X0 = 194, VOL_TAP_X1 = 242;
+static uint32_t volPopupUntil = 0;
+static constexpr int VP_X = 20, VP_Y = 54, VP_W = 280, VP_H = 134, VP_CY = 126, VP_R = 30;
+static constexpr int VP_MINUS_X = 66, VP_PLUS_X = 254;
+
+static void drawTopBarVolume() {
+  auto& d = M5.Display;
+  d.fillRect(VOL_ICON_X - 9, 2, 36, TOP_H - 4, C_BAR);
+  iconSpeaker(VOL_ICON_X, TOP_H / 2, volLevel ? C_WHITE : C_DIM);
+  for (int b = 0; b < 3; b++) {
+    int h = 4 + b * 3;
+    bool on = volLevel > b * 10 / 3;  // 1-3 one bar, 4-6 two, 7-10 three
+    d.fillRect(VOL_ICON_X + 11 + b * 4, TOP_H / 2 + 5 - h, 3, h, on ? C_WHITE : C_OFF);
+  }
+}
+
+static void drawVolumePopupLevel() {
+  auto& d = M5.Display;
+  int x0 = 106;
+  for (int i = 0; i < 10; i++) {
+    int h = 12 + i * 5, bx = x0 + i * 11;
+    d.fillRect(bx, VP_CY - 30, 8, 60, rgb(20, 20, 40));
+    d.fillRoundRect(bx, VP_CY + 28 - h, 8, h, 3, i < volLevel ? C_YELLOW : rgb(70, 74, 100));
+  }
+}
+
+static void drawVolumePopup() {
+  auto& d = M5.Display;
+  d.fillRoundRect(VP_X, VP_Y + 4, VP_W, VP_H, 18, C_SHADE);
+  d.fillRoundRect(VP_X, VP_Y, VP_W, VP_H, 18, rgb(20, 20, 40));
+  d.drawRoundRect(VP_X, VP_Y, VP_W, VP_H, 18, C_OFF);
+  d.setFont(&fonts::FreeSansBold9pt7b);
+  d.setTextDatum(middle_center);
+  d.setTextColor(C_DIM);
+  d.drawString("Volume", 160, VP_Y + 16);
+  for (int k = 0; k < 2; k++) {
+    int x = k ? VP_PLUS_X : VP_MINUS_X;
+    d.fillCircle(x, VP_CY + 3, VP_R, C_SHADE);
+    d.fillCircle(x, VP_CY, VP_R, C_ORANGE);
+    d.fillRoundRect(x - 13, VP_CY - 3, 27, 7, 3, C_WHITE);
+    if (k) d.fillRoundRect(x - 3, VP_CY - 13, 7, 27, 3, C_WHITE);
+  }
+  drawVolumePopupLevel();
+}
+
+static void openVolumePopup() {
+  volPopupUntil = millis() + 3000;
+  drawVolumePopup();
+}
+
+static void closeVolumePopup() {
+  volPopupUntil = 0;
+  dirtyAll = true;  // repaint whatever was underneath
+}
+
+static void handleVolumePopup(const m5::touch_detail_t& t) {
+  if (!t.wasClicked()) return;
+  for (int k = 0; k < 2; k++) {
+    int dx = t.x - (k ? VP_PLUS_X : VP_MINUS_X), dy = t.y - VP_CY;
+    if (dx * dx + dy * dy > (VP_R + 12) * (VP_R + 12)) continue;
+    buzz();
+    volLevel = constrain(volLevel + (k ? 1 : -1), 0, 10);
+    applyVolume();
+    drawVolumePopupLevel();
+    drawTopBarVolume();
+    volPopupUntil = millis() + 3000;
+    return;
+  }
+  if (t.x < VP_X || t.x >= VP_X + VP_W || t.y < VP_Y || t.y >= VP_Y + VP_H) closeVolumePopup();  // tapped outside
+}
+
 static void drawTopBar() {
   auto& d = M5.Display;
   d.fillRect(0, 0, 320, TOP_H, C_BAR);
@@ -1872,6 +1951,7 @@ static void drawTopBar() {
   if (btConnected) iconHeadphones(254, 2, C_WHITE);
 #endif
   iconBattery(280, 4, M5.Power.getBatteryLevel(), usbPower());
+  drawTopBarVolume();
 }
 
 static constexpr uint32_t HOLD_MS = 3000;
@@ -2006,7 +2086,7 @@ static void drawAlbums() {
       cv->pushSprite(&d, x, y, COVER_KEY);
     } else {
       d.fillRoundRect(x, y, TILE, TILE, TILE / 8, albumColor(a));
-      drawTitle(albums[a].name, x + TILE / 2, y + TILE / 2, TILE - 12, TILE - 12, C_WHITE, true);
+      drawTitle(albums[a].name, x + TILE / 2, y + TILE / 2, TILE - 8, TILE - 10, C_WHITE, true);
     }
     if (a == playAlbum) {
       d.fillCircle(x + TILE - 14, y + TILE - 14, 12, C_GREEN);
@@ -3641,7 +3721,7 @@ static void serviceSleep() {
     }
   }
   serviceSleepSound();
-  if (screen != Screen::Sleep) return;
+  if (screen != Screen::Sleep || volPopupUntil) return;
   static uint32_t lastGlow = 0;
   if (dimmed && nightLight) {  // slow warm color drift, ~2 minutes around the palette
     if (now - lastGlow > 200) {
@@ -4032,6 +4112,10 @@ static void showScreen(Screen s) {
 }
 
 static void redraw() {
+  if (volPopupUntil) {  // only the top bar; the rest repaints when the panel closes
+    if (dirtyHeader) { drawTopBar(); dirtyHeader = false; }
+    return;
+  }
   if (dirtyAll) {
     dirtyAll = false;
     dirtyHeader = true;
@@ -4176,6 +4260,18 @@ static void handleInput() {
   } else if (holdArmed) {
     holdArmed = false;
     dirtyHeader = true;
+  }
+
+  // the volume panel takes the taps while it's open (the touch buttons still work)
+  bool anyButton = BTN_LEFT.wasClicked() || M5.BtnB.wasClicked() || BTN_RIGHT.wasClicked();
+  if (volPopupUntil) {
+    if (!anyButton) { handleVolumePopup(t); return; }
+    volPopupUntil = 0;
+  }
+  if (t.wasClicked() && t.y < TOP_H + 8 && t.x >= VOL_TAP_X0 && t.x < VOL_TAP_X1 && screen != Screen::Grownups) {
+    buzz();
+    openVolumePopup();
+    return;
   }
 
   // the three touch buttons pick the activity
@@ -4554,12 +4650,15 @@ void loop() {
 
   handleInput();
   buzzService();
-  if (isQuiz(screen)) serviceQuiz(screen);
+  if (volPopupUntil && (int32_t)(millis() - volPopupUntil) >= 0) closeVolumePopup();
+  if (!volPopupUntil) {  // games pause under the volume panel
+    if (isQuiz(screen)) serviceQuiz(screen);
+    if (screen == Screen::Simon) serviceSimon();
+    if (screen == Screen::Memory) serviceMemory();
+    if (screen == Screen::Maze) serviceMaze();
+    if (screen == Screen::Moles) serviceMoles();
+  }
   nightlyCheck();
-  if (screen == Screen::Simon) serviceSimon();
-  if (screen == Screen::Memory) serviceMemory();
-  if (screen == Screen::Maze) serviceMaze();
-  if (screen == Screen::Moles) serviceMoles();
   serviceSleep();
   trackListening();
   static uint32_t lastStats = 0;
@@ -4570,7 +4669,7 @@ void loop() {
 
   static uint32_t lastTick = 0, lastEq = 0, lastBat = 0;
   uint32_t now = millis();
-  if (screen == Screen::Player && !overlayUntil && !dimmed && !tracks.empty()) {
+  if (screen == Screen::Player && !overlayUntil && !dimmed && !volPopupUntil && !tracks.empty()) {
     if (now - lastEq > 120) { lastEq = now; drawEqualizer(!paused); }
     if (now - lastTick > 500) { lastTick = now; drawProgress(); }
   }
