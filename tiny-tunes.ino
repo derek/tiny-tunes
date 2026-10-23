@@ -14,7 +14,7 @@
 // Kid-friendly controls:
 //   Big buttons: volume down, previous, play/pause, next, volume up
 //   The three touch zones above the screen are places: Listen / Play / Sleep
-//     Listen again on the player = play/pause; Play = the game picker;
+//     Listen = the album picker (again = the player); Play = the game picker;
 //     Sleep again = start or extend the sleep timer
 //   Tap the song card: album covers (swipe up/down to page)
 //   Swipe right on the album covers or a song list: back
@@ -4182,10 +4182,13 @@ static void handleInput() {
   int pick = BTN_LEFT.wasClicked() ? 0 : M5.BtnB.wasClicked() ? 1 : BTN_RIGHT.wasClicked() ? 2 : -1;
   if (pick >= 0) {
     buzz();
-    if (pick == 0) {  // Listen: from a list, back to the player; on the player, play/pause
-      if (screen != Screen::Player) showScreen(Screen::Player);
-      else if (current < 0) playAlbumTrack(0, 0);
-      else togglePause();
+    if (pick == 0) {  // Listen: the album picker (on the page with the playing album); again: the player
+      if (screen != Screen::Albums) {
+        albumsPage = std::max(0, playAlbum) / TILES;
+        showScreen(Screen::Albums);
+      } else {
+        showScreen(Screen::Player);
+      }
     } else if (pick == 1) {  // Play: the game picker (also from inside a game)
       if (screen != Screen::PlayHome) showScreen(Screen::PlayHome);
     } else {  // Sleep; pressed again there: start/extend the sleep timer
