@@ -6,6 +6,30 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.4.1 — 2026-10-23
+
+### Fixed
+- `upload.py` (uploads, moves, deletes) no longer starts music by itself afterwards.
+- A possible crash: changing the library (web uploads, Clean up, podcast sync)
+  while the grown-ups screen was open, then pressing Done.
+- The nightly podcast sync waits until nobody has touched the device for 10
+  minutes, so it can't reboot it mid-game at night.
+- Podcast shelves are recognized by type, not by the folder being spelled
+  `/podcasts` exactly (newest-first order, titles, episode layout).
+- A damaged spot in an MP3 skips past the damage instead of ending the track
+  (and no longer marks a book chapter as finished).
+- Web uploads, renames and deletes no longer stop the music unless they touch the
+  song that's playing; a podcast sync never deletes the episode that's playing.
+- A song file that can't be opened is skipped instead of "playing" silence.
+- Resume files forget episodes that have been deleted.
+
+### Changed
+- Battery: the main loop rests a few milliseconds per pass when nothing needs fast
+  service (no music, sound or download), instead of running the CPU flat out.
+- The web Library is sent album by album, so a large library can't run the WiFi
+  firmware out of memory.
+- Serial: `PWR` (power draw) and `REST 0|1` (idle rest off/on, for measuring).
+
 ## 0.4.0 — 2026-10-22
 
 ### Added

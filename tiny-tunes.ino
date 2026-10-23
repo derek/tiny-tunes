@@ -282,7 +282,7 @@ static void nightSyncDone();
 static void stopPlayback();
 static void playTrack(int i);
 static void playAlbumTrack(int album, int track);
-static void rescanLibrary();
+static void rescanLibrary(bool keepPlaying = false);
 static void setVolLevel(int lvl);
 static void togglePause();
 static void switchMode(bool quiet = false);
@@ -309,12 +309,25 @@ static bool startsNoCase(const char* s, const char* prefix, int n) {
   return true;
 }
 static std::vector<String> listTracks(int a);
+static bool isPodcastAlbum(int a);
 static String joinPath(const String& dir, const char* name);
 static bool isMp3(const char* name);
 static int findAlbum(const String& path);
 static bool jpegSize(const String& path, int& w, int& h);
 static bool removePath(const String& path);
 static uint32_t fileSize(const String& path);
+static std::vector<ResumeEntry> loadResume(const String& albumPath);
+static void saveResume(const String& albumPath, const std::vector<ResumeEntry>& v);
+static void rescanKeepingPlace();
+
+// The file that's playing (or loaded), or "".
+static String playingPath() { return file && current >= 0 && current < (int)tracks.size() ? tracks[current] : String(); }
+// Would changing `path` (a file or folder) pull the rug out from under the playing song?
+static bool touchesPlaying(const String& path) {
+  String p = playingPath();
+  return p.length() && (p == path || p.startsWith(path + "/"));
+}
+
 static constexpr const char* COVER_CACHE = ".cover.rgb565";  // decoded cover, see "album covers"
 static constexpr int COVER_MASTER = 160;                      // ...160x160 RGB565 after this header:
 struct CoverCacheHeader { char magic[4]; uint32_t srcSize; };
@@ -566,7 +579,7 @@ function id3Art(buf){const b=new Uint8Array(buf);if(b[0]!=73||b[1]!=68||b[2]!=51
 async function planCleanup(){
  await loadLib();const plan=[];
  for(const a of lib.albums){
-  if(a.folder.startsWith('/podcasts/'))continue;  // managed by the podcast sync
+  if((lib.shelves[a.shelf]||{}).kind=='podcasts')continue;  // managed by the podcast sync
   const isRoot=a.folder==lib.root||a.folder=='/';
   // song files -> "Clean Title.mp3" (keeping a leading track number if there was one)
   const used=new Set(a.tracks.map(t=>t.file.toLowerCase())),renames=[];
@@ -660,25 +673,6 @@ static void audioPump() {
 
 // Only paths inside the card, no "..".
 static bool okPath(const String& p) { return p.startsWith("/") && p.indexOf("..") < 0 && p.length() > 1; }
-
-// Rescans, then keeps the same album and song loaded (paused) so organizing
-// doesn't jump the kid's player back to the first album.
-static void rescanKeepingPlace() {
-  String path = playAlbum >= 0 ? albums[playAlbum].path : "";
-  int track = std::max(current, 0);
-  rescanLibrary();
-  int a = findAlbum(path);
-  if (a < 0 && !albums.empty()) { a = 0; track = 0; }
-  if (a >= 0) {
-    playAlbum = a;
-    tracks = listTracks(a);
-    current = tracks.empty() ? -1 : std::min<int>(track, tracks.size() - 1);
-    if (current >= 0) title = trackTitle(tracks[current], a);
-    paused = true;
-  }
-  if (screen == Screen::Albums || screen == Screen::Tracks || screen == Screen::Shelves) screen = Screen::Player;  // indexes are stale
-  dirtyAll = true;
-}
 
 // ---------- podcasts (WiFi mode) ----------
 // Shows are listed in /podcasts/feeds.txt, one "keep<TAB>url<TAB>name" per line.
@@ -892,7 +886,7 @@ static void finishSync() {
   syncLastRun = millis();
   syncEverRan = true;
   syncStatus = syncError.length() ? "Synced with problems" : "Up to date";
-  if (syncChanged) rescanPending = true;  // rescanning stops playback, so not mid-song
+  if (syncChanged) rescanPending = true;  // picked up on the next loop (music keeps playing)
   syncChanged = false;
   if (nightSync) nightSyncDone();
 }
@@ -951,7 +945,14 @@ static void finishFeed() {
     g.close();
   }
   if (d) d.close();
-  for (auto& p : drop) { SD.remove(p); syncChanged = true; }
+  for (auto& p : drop)
+    if (!touchesPlaying(p)) { SD.remove(p); syncChanged = true; }  // the playing one goes next time
+  // forget resume spots for episodes that are gone
+  auto resume = loadResume(dir);
+  size_t before = resume.size();
+  resume.erase(std::remove_if(resume.begin(), resume.end(),
+                              [&](const ResumeEntry& e) { return !SD.exists(dir + "/" + e.file); }), resume.end());
+  if (resume.size() != before) saveResume(dir, resume);
   syncIdx = 0;
   if (syncQueue.empty()) nextFeed();
   else startDownload();
@@ -990,7 +991,7 @@ static void podcastLoop() {
   uint32_t now = millis();
   if (!wifiUpAt) wifiUpAt = now;
   if (syncState == SyncState::Idle) {
-    if (rescanPending && !musicIsPlaying()) { rescanPending = false; rescanKeepingPlace(); }
+    if (rescanPending) { rescanPending = false; rescanKeepingPlace(); }
     bool due = syncRequested || (!syncEverRan && now - wifiUpAt > (nightSync ? 2000 : 30000));
     if (!due || feeds.empty()) { syncRequested = false; return; }
     syncRequested = false;
@@ -1075,7 +1076,7 @@ static void setupPodcastWeb() {
   web.on("/podcast/remove", HTTP_POST, [] {
     int i = web.arg("i").toInt();
     if (i < 0 || i >= (int)feeds.size() || syncState != SyncState::Idle) { web.send(409, "text/plain", "Try again when the sync is done"); return; }
-    if (web.arg("files") == "1") { stopPlayback(); removePath(showFolder(feeds[i], i)); }
+    if (web.arg("files") == "1") { if (touchesPlaying(showFolder(feeds[i], i))) stopPlayback(); removePath(showFolder(feeds[i], i)); }
     feeds.erase(feeds.begin() + i);
     saveFeeds();
     rescanKeepingPlace();
@@ -1099,19 +1100,22 @@ static void setupWeb() {
     web.send(200, "application/json", j + "]}");
   });
   // Everything the organize/cleanup UI needs: albums, songs with display titles, cover status, stray files.
-  web.on("/library", HTTP_GET, [] {
+  web.on("/library", HTTP_GET, [] {  // streamed album by album, so a big library doesn't fill RAM
     static const char* KIND[] = {"music", "podcasts", "books", "other"};
+    web.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    web.send(200, "application/json", "");
     String j = "{\"root\":\"" + jsonEscape(libraryRoot()) + "\",\"playing\":" + String(playAlbum) + ",\"shelves\":[";
     for (size_t i = 0; i < shelves.size(); i++)
       j += String(i ? ",{" : "{") + "\"name\":\"" + jsonEscape(shelves[i].name) + "\",\"path\":\"" + jsonEscape(shelves[i].path) +
            "\",\"kind\":\"" + KIND[(int)shelves[i].kind] + "\"}";
     j += "],\"albums\":[";
+    web.sendContent(j);
     for (size_t a = 0; a < albums.size(); a++) {
       audioPump();
       std::vector<String> list = (int)a == playAlbum ? tracks : listTracks(a);
       const String& cf = albums[a].coverFile;
       uint32_t coverSize = cf.length() ? fileSize(joinPath(albums[a].path, cf.c_str())) : 0;
-      j += (a ? ",{" : "{");
+      j = a ? ",{" : "{";
       j += "\"name\":\"" + jsonEscape(albums[a].name) + "\",\"folder\":\"" + jsonEscape(albums[a].path) +
            "\",\"cover\":\"" + jsonEscape(cf) + "\",\"coverSize\":" + String(coverSize) + ",\"shelf\":" + String(albums[a].shelf) +
            ",\"tracks\":[";
@@ -1125,7 +1129,7 @@ static void setupWeb() {
       bool first = true;
       while (File f = dir.openNextFile()) {
         const char* n = f.name();
-        if (!f.isDirectory() && !isMp3(n) && albums[a].coverFile != n && strcmp(n, COVER_CACHE) &&
+        if (!f.isDirectory() && !isMp3(n) && albums[a].coverFile != n && strcmp(n, COVER_CACHE) && strcmp(n, ".resume") &&
             !(albums[a].path == "/" && n[0] == '.')) {
           j += (first ? "\"" : ",\"") + jsonEscape(n) + "\"";
           first = false;
@@ -1134,8 +1138,10 @@ static void setupWeb() {
       }
       dir.close();
       j += "]}";
+      web.sendContent(j);
     }
-    web.send(200, "application/json", j + "]}");
+    web.sendContent("]}");
+    web.sendContent("");  // end of the chunked reply
   });
   // Raw file download; ?n= limits it to the first n bytes (for reading embedded cover art).
   web.on("/file", HTTP_GET, [] {
@@ -1198,7 +1204,7 @@ static void setupWeb() {
     String from = web.arg("from"), to = web.arg("to");
     if (!okPath(from) || !okPath(to) || !SD.exists(from)) { web.send(400, "text/plain", "bad path"); return; }
     if (SD.exists(to)) { web.send(409, "text/plain", "something with that name already exists"); return; }
-    stopPlayback();
+    if (touchesPlaying(from)) stopPlayback();
     int slash = to.lastIndexOf('/');
     if (slash > 0) SD.mkdir(to.substring(0, slash));
     if (SD.rename(from, to)) web.send(200, "text/plain", "OK");
@@ -1207,7 +1213,7 @@ static void setupWeb() {
   web.on("/rm", HTTP_POST, [] {
     String path = web.arg("path");
     if (!okPath(path) || path == "/music") { web.send(400, "text/plain", "bad path"); return; }
-    stopPlayback();
+    if (touchesPlaying(path)) stopPlayback();
     if (removePath(path)) web.send(200, "text/plain", "OK");
     else web.send(500, "text/plain", "delete failed");
   });
@@ -1238,9 +1244,7 @@ static void setupWeb() {
          [] { web.send(webPath.length() ? 200 : 500, "text/plain", webPath.length() ? "OK" : "write failed"); },
          [] {
            HTTPUpload& up = web.upload();
-           if (up.status == UPLOAD_FILE_START) {
-             stopPlayback();
-             paused = true;
+           if (up.status == UPLOAD_FILE_START) {  // music keeps playing; /rescan picks the new files up
              String dir = web.hasArg("dir") ? web.arg("dir") : web.arg("album").length() ? joinPath(libraryRoot(), safeName(web.arg("album")).c_str()) : libraryRoot();
              if (dir != "/" && !okPath(dir)) { webPath = ""; return; }
              if (dir != "/") SD.mkdir(dir);
@@ -1295,7 +1299,7 @@ static std::vector<String> listTracks(int a) {
   }
   dir.close();
   std::sort(found.begin(), found.end(), lessCI);
-  if (albums[a].path.startsWith("/podcasts/")) std::reverse(found.begin(), found.end());  // date-named: newest first
+  if (isPodcastAlbum(a)) std::reverse(found.begin(), found.end());  // date-named: newest first
   albums[a].artistPrefixed = !found.empty() && dashed * 10 >= (int)found.size() * 6;
   return found;
 }
@@ -1350,8 +1354,10 @@ static int addShelf(const String& name, const String& path, ShelfKind kind) {
 
 static void clearCoverCache();
 static int countNewEpisodes(int a);
-static void rescanLibrary() {
-  stopPlayback();
+static void onLibraryChanged();
+// keepPlaying: leave the decoder running (the caller re-finds the playing song).
+static void rescanLibrary(bool keepPlaying) {
+  if (!keepPlaying) stopPlayback();
   albums.clear();
   shelves.clear();
   // the three known shelves first, in this order; empty ones are dropped below
@@ -1398,17 +1404,44 @@ static void rescanLibrary() {
     sh.albums++;
     if (sh.kind == ShelfKind::Podcasts) sh.newCount += albums[i].newCount = countNewEpisodes(i);
   }
-  playAlbum = -1;
-  tracks.clear();
-  current = -1;
+  if (!keepPlaying) {
+    playAlbum = -1;
+    tracks.clear();
+    current = -1;
+  }
   clearCoverCache();
   songCountCache = -1;
+  onLibraryChanged();
 }
 
 static int findAlbum(const String& path) {
   for (size_t i = 0; i < albums.size(); i++)
     if (albums[i].path == path) return i;
   return -1;
+}
+
+// Rescans the card but keeps the player's place: the same album and song stay loaded,
+// and a song that's playing keeps playing (unless its file is gone).
+static void rescanKeepingPlace() {
+  String albumPath = playAlbum >= 0 && playAlbum < (int)albums.size() ? albums[playAlbum].path : "";
+  String trackPath = current >= 0 && current < (int)tracks.size() ? tracks[current] : "";
+  int track = std::max(current, 0);
+  rescanLibrary(true);
+  int a = findAlbum(albumPath);
+  if (a < 0 && !albums.empty()) { a = 0; track = 0; }
+  if (a < 0) { stopPlayback(); playAlbum = -1; tracks.clear(); current = -1; return; }
+  playAlbum = a;
+  tracks = listTracks(a);
+  auto it = std::find(tracks.begin(), tracks.end(), trackPath);
+  if (it != tracks.end()) {
+    current = it - tracks.begin();
+  } else {  // the song we had is gone: load another, paused
+    stopPlayback();
+    current = tracks.empty() ? -1 : std::min<int>(track, tracks.size() - 1);
+    paused = true;
+  }
+  if (current >= 0 && !file) title = trackTitle(tracks[current], a);
+  dirtyNow = dirtyHeader = true;
 }
 
 // ---------- titles ----------
@@ -1468,7 +1501,10 @@ static String cleanTitle(String t, bool fromFilename, bool dropArtist) {
   return t.length() ? t : String("Song");
 }
 
-static bool isPodcastAlbum(int a) { return a >= 0 && a < (int)albums.size() && albums[a].path.startsWith("/podcasts/"); }
+static bool isPodcastAlbum(int a) {
+  return a >= 0 && a < (int)albums.size() && albums[a].shelf >= 0 && albums[a].shelf < (int)shelves.size() &&
+         shelves[albums[a].shelf].kind == ShelfKind::Podcasts;
+}
 
 // "Wow in the World: The Moon" in the "Wow in the World" show -> "The Moon"
 static String dropShowName(String t, const String& show) {
@@ -1599,15 +1635,33 @@ static void stopPlayback() {
   delete file; file = nullptr;
 }
 
+static uint32_t forceStartPos = 0;  // recovering from a damaged spot: start here instead
+static int recoverTries = 0;
+
 static void playTrack(int i) {
+  static int missing = 0;  // files in a row that wouldn't open
   if (tracks.empty()) return;
   i = (i + tracks.size()) % tracks.size();  // stays inside the album, wrapping around
+  bool recovering = forceStartPos != 0;
+  if (!recovering) recoverTries = 0;
   stopPlayback();
   sleepSound = 0;  // music replaces any calm sound
   out.overrideRate(0);
   current = i;
   paused = false;
   file = new AudioFileSourceSD(tracks[i].c_str());
+  if (!file->isOpen()) {  // deleted or unreadable: skip it (but don't spin forever)
+    delete file;
+    file = nullptr;
+    forceStartPos = 0;
+    if (++missing < (int)tracks.size()) { playTrack(i + 1); return; }
+    missing = 0;
+    paused = true;
+    title = trackTitle(tracks[i], playAlbum);
+    dirtyNow = dirtyHeader = true;
+    return;
+  }
+  missing = 0;
   String tagTitle = readId3Title(file);
   title = tagTitle.length() ? cleanTitle(tagTitle, false, false) : trackTitle(tracks[i], playAlbum);
   if (isPodcastAlbum(playAlbum)) title = dropShowName(title, albums[playAlbum].name);
@@ -1616,7 +1670,7 @@ static void playTrack(int i) {
     String f = fileName(tracks[i]);
     ResumeEntry* e = findResume(v, f);
     uint32_t start = file->getPos(), size = file->getSize();
-    if (e && !e->done && e->pos > start + 48000 && e->pos + 16000 < size) file->seek(e->pos - 24000, SEEK_SET);
+    if (!recovering && e && !e->done && e->pos > start + 48000 && e->pos + 16000 < size) file->seek(e->pos - 24000, SEEK_SET);
     if (!e) {  // first listen: no longer "new"
       v.push_back({f, start, false});
       saveResume(albums[playAlbum].path, v);
@@ -1624,8 +1678,10 @@ static void playTrack(int i) {
       if (al.newCount > 0) { al.newCount--; shelves[al.shelf].newCount--; }
     }
   }
+  if (recovering) { file->seek(forceStartPos, SEEK_SET); forceStartPos = 0; }
   mp3->begin(file, &out);  // the decoder finds the next frame on its own after a seek
   dirtyNow = dirtyHeader = true;
+  if (recovering) return;  // same song, carrying on
   songsPlayed++;
   prefs.putUInt("played", songsPlayed);
   prefs.putString("album", albums[playAlbum].path);  // power-on picks up here
@@ -4149,6 +4205,7 @@ static void nightlyCheck() {
   uint32_t today = todayStamp();
   if (!today || prefs.getUInt("nightdone", 0) == today) return;
   if (!usbPower() || musicIsPlaying() || sleepSound || sleepTimerEnd || fadeStart) return;
+  if (now - lastTouchMs < 10 * 60000UL) return;  // someone's using it
   if (!prefs.isKey("ssid") || !haveFeeds()) { prefs.putUInt("nightdone", today); return; }  // nothing to do tonight
 #if CORE2_WIFI
   if (syncState == SyncState::Idle) { prefs.putUInt("nightdone", today); requestSync(); }
@@ -4448,6 +4505,18 @@ static void trackListening() {
   if (unsaved >= 60) { unsaved = 0; prefs.putUInt("listensec", listenSec); }
 }
 
+// The library was rescanned: album indexes changed, so nothing may keep pointing at the old ones.
+static void onLibraryChanged() {
+  shelfAlbums.clear();
+  viewTracks.clear();
+  viewResume.clear();
+  viewAlbum = -1;
+  auto stale = [](Screen s) { return s == Screen::Albums || s == Screen::Tracks || s == Screen::Shelves; };
+  if (stale(screen)) screen = Screen::Player;
+  if (stale(beforeGrownups)) beforeGrownups = Screen::Player;
+  dirtyAll = true;
+}
+
 // ----- screen switching / redraw -----
 static void showScreen(Screen s) {
   if (isQuiz(s)) enterQuiz(s);
@@ -4634,7 +4703,7 @@ static void handleInput() {
       if (screen == Screen::Player) {
         if (playAlbum >= 0) openTracks(playAlbum);
         else openListen();
-      } else if (screen == Screen::Tracks) {
+      } else if (screen == Screen::Tracks && viewAlbum >= 0) {
         openShelf(albums[viewAlbum].shelf, viewAlbum);
       } else if (screen == Screen::Albums && shelves.size() > 1) {
         showScreen(Screen::Shelves);
@@ -4692,6 +4761,8 @@ static void handleIdle() {
 //   BAT                  -> BAT <percent> <charging|discharging> <millivolts> <milliamps>
 //   VER                  -> VER <version> <bt|wifi>
 //   IMU                  -> IMU <ax> <ay> <az> in hundredths of g (Tilt Maze axis check)
+//   PWR                  -> PWR usb=<mA> bat=<mA> rest=<0|1>  (power draw)
+//   REST <0|1>           -> idle CPU rest off/on (for measuring), "OK"
 //                           (milliamps: + charging, - draining)
 //   LS                   -> one "F <path> <size>" per file (up to two folders deep), then "END"
 //   PUT <path> <size>    -> OK, then host sends raw bytes in UP_CHUNK blocks,
@@ -4772,6 +4843,8 @@ static bool removePath(const String& path) {  // recursive
   return SD.rmdir(path);
 }
 
+static bool idleRest = true;  // "REST 0" over serial turns it off, to compare power draw
+
 static void handleSerial() {
   if (!Serial.available()) return;
   String line = Serial.readStringUntil('\n');
@@ -4780,6 +4853,13 @@ static void handleSerial() {
     float ax, ay, az;
     M5.Imu.getAccel(&ax, &ay, &az);
     Serial.printf("IMU %d %d %d\n", (int)(ax * 100), (int)(ay * 100), (int)(az * 100));
+  } else if (line == "PWR") {  // total draw while plugged in (and charged), battery current, idle rest on/off
+    M5.Power.Axp192.bitOn(0x82, 0x0C);  // ADC enable 1: VBUS voltage + current (off by default)
+    delay(80);                          // let the ADC take a sample
+    Serial.printf("PWR usb=%dmA bat=%dmA rest=%d\n", (int)M5.Power.Axp192.getVBUSCurrent(), (int)M5.Power.getBatteryCurrent(), idleRest);
+  } else if (line.startsWith("REST ")) {
+    idleRest = line.substring(5).toInt() != 0;
+    Serial.println("OK");
   } else if (line == "VER") Serial.printf("VER %s %s\n", TT_VERSION, CORE2_WIFI ? "wifi" : "bt");
   else if (line == "PING") {
 #if CORE2_WIFI
@@ -4805,21 +4885,19 @@ static void handleSerial() {
   } else if (line == "LS") {
     listFiles("/", 2);
     Serial.println("END");
-  } else if (line == "RESCAN") {
-    rescanLibrary();
+  } else if (line == "RESCAN") {  // keeps the player's place; never starts music by itself
+    rescanKeepingPlace();
     Serial.printf("OK %u\n", (unsigned)albums.size());
-    if (!albums.empty()) playAlbumTrack(0, 0);
-    showScreen(Screen::Player);
   } else if (line.startsWith("MV ")) {
     int tab = line.indexOf('\t');
     if (tab < 0) { Serial.println("ERR bad args"); return; }
     String from = line.substring(3, tab), to = line.substring(tab + 1);
-    stopPlayback();
+    if (touchesPlaying(from)) stopPlayback();
     int slash = to.lastIndexOf('/');
     if (slash > 0) SD.mkdir(to.substring(0, slash));
     Serial.println(SD.rename(from, to) ? "OK" : "ERR move failed");
   } else if (line.startsWith("RM ")) {
-    stopPlayback();
+    if (touchesPlaying(line.substring(3))) stopPlayback();
     Serial.println(removePath(line.substring(3)) ? "OK" : "ERR remove failed");
   } else if (line.startsWith("TIME ")) {  // local time from the host, e.g. upload.py
     int v[7] = {0};
@@ -4994,7 +5072,14 @@ void loop() {
   M5.update();
   handleSerial();
 
-  if (mp3->isRunning() && !paused && !mp3->loop()) {  // track finished
+  if (mp3->isRunning() && !paused && !mp3->loop()) {  // track finished... or hit a damaged spot
+    bool nearEnd = !file || file->getPos() + 65536 >= file->getSize();
+    if (!nearEnd && recoverTries < 3) {  // jump a little past the damage and carry on
+      recoverTries++;
+      forceStartPos = file->getPos() + 16384;
+      playTrack(current);
+      return;
+    }
     trackJustFinished = true;
     saveResumePos(true);
     if (isResumable(playAlbum) && current + 1 >= (int)tracks.size()) {  // end of the book / last episode: stop
@@ -5054,4 +5139,12 @@ void loop() {
     int state = M5.Power.getBatteryLevel() * 2 + usbPower() + (M5.Rtc.getTime(&tm) ? tm.minutes * 1000 : 0);
     if (state != shown) { shown = state; dirtyHeader = true; }
   }
+
+  // Nothing needs fast service (no audio to decode, no download): let the CPU rest a
+  // few ms per pass instead of spinning flat out. Touch still feels instant at ~150 Hz.
+  bool busy = musicIsPlaying() || sleepSound || fadeStart;
+#if CORE2_WIFI
+  busy |= syncState != SyncState::Idle;
+#endif
+  if (idleRest && !busy) delay(6);
 }
