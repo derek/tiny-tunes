@@ -1,0 +1,103 @@
+# Changelog
+
+All notable changes to Tiny Tunes. The version on the device (grown-ups → Stats,
+the web page footer, `upload.py --ls`) is `VERSION` + build number + commit,
+e.g. `0.3.0+6.cb61af8`.
+
+## Unreleased
+
+## 0.4.0 — 2026-10-22
+
+### Added
+- Listen has shelves: Music, Podcasts, Books, plus any other top-level folder of
+  albums on the card (e.g. `/stories`). Podcasts shows how many episodes are new.
+- Books and podcasts resume where they stopped, per track, even after power-off.
+  Their lists show a NEW dot, a progress bar for part-heard, or a check when done.
+- Web page: the Library is grouped by shelf, and uploads choose a shelf (Music,
+  Books, ...). `upload.py --shelf books` does the same.
+
+### Changed
+- Play: page through the games by swiping left/right (was up/down).
+- The Listen button goes up one level: player → its track list → albums → shelves.
+  At the shelves it stays put; from Play or Sleep it goes to the player.
+- The albums screen has a header naming the shelf ("◀ Music"; tap it to go back),
+  with the page dots, and pages sideways like the games. Grids page sideways,
+  lists scroll up/down, and swipe-right-back is only on the song list.
+- Hold the Listen button (about half a second) to jump straight to the player
+  from anywhere.
+- The player has just previous / play-pause / next; volume is in the top bar.
+- Tapping the song card no longer opens the albums (swiping it still changes songs).
+- The top-bar speaker no longer shows a level meter, and sits next to the battery
+  (the WiFi/headphones icon, which comes and goes, moved to its left).
+- A book or podcast stops at its last chapter/episode instead of starting over.
+
+### Fixed
+- The charging bolt no longer stays on after unplugging (USB is now detected from
+  the battery current; the Core2's USB flag stays on with the cable out).
+- Opening the web page no longer freezes the device (and its music) for ~10
+  seconds: album covers on the page are small 160×160 images instead of the
+  original files, and music keeps playing during slow web requests.
+
+## 0.3.0 — 2026-10-22
+
+### Added
+- Volume on every screen: a speaker with a 3-bar meter in the top bar. Tapping it
+  opens a big volume panel over whatever is showing; it closes after 3 seconds or
+  a tap outside.
+
+### Fixed
+- Album names on cover-less tiles wrap whole words ("Fleetwood / Mac") instead of
+  cutting them off. Any title with a word too wide now shrinks the font.
+
+## 0.2.1 — 2026-10-22
+
+### Changed
+- The Listen (left) button opens the album picker from anywhere, on the page with
+  the playing album. Pressing it again goes to the player. (It used to toggle
+  play/pause on the player.)
+
+### Added
+- Startup splash: "Tiny Tunes" in rainbow letters with music notes and the
+  version, shown for 5 seconds while the card loads. Skipped on the dark
+  nightly-sync reboots.
+
+## 0.2.0 — 2026-10-22
+
+### Added
+- Games: Simon, Memory Match, What Comes Next?, Tilt Maze, Whack-a-Mole.
+- Nightly podcast sync: between midnight and 5 am, when plugged in and idle, the
+  device switches to WiFi mode, syncs podcasts and switches back, keeping the
+  screen dark (or the night-light glowing).
+- Podcast episode lists: taller rows with a date badge and titles wrapped over up
+  to three lines; the show name is dropped from episode titles.
+- Grown-ups Stats: four pages (device, listening and fun games, learning games,
+  technical).
+- `IMU` serial command for checking the Tilt Maze axes.
+
+### Changed
+- The Play picker pages 6 games at a time and no longer shows levels.
+- Podcasts sync nightly instead of every 6 hours.
+
+## 0.1.0 — 2026-10-22
+
+First versioned release.
+
+### Added
+- Listen / Play / Sleep on the three touch buttons.
+- Listen: SD-card albums with cover art (JPG or PNG, decoded once and cached),
+  played to Bluetooth headphones or the speaker; song titles cleaned for display.
+- Play: Missing Letter, Right Spelling, Telling Time and Math, levelled in rounds
+  of 5 questions.
+- Sleep: big clock with a moon/sun "OK to wake", sleep timer with fade-out,
+  rain/ocean sounds, night-light.
+- Grown-ups screen (hold the top bar 3 s): max volume, brightness, auto-off,
+  wake-up time, Bluetooth pairing, stats.
+- WiFi mode web page: add music and covers, organize albums, Clean up, podcasts
+  (RSS or Apple Podcasts links), playback remote.
+- `upload.py` for uploads over USB or WiFi, WiFi setup, mode switching and card
+  prep; `flash.sh` builds and flashes both modes with a version stamp.
+
+### Fixed
+- Music no longer plays at the wrong speed after a sleep sound.
+- Power-on selects the last song without playing it.
+- The charging bolt follows the real USB state.

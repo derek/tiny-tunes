@@ -91,3 +91,5 @@ Every `upload.py` run also sets the device clock from the computer.
   web page and the USB serial protocol, which is documented above `handleSerial()`.
 - `upload.py`: host tool for uploads, WiFi setup, mode switching and card prep.
 - `flash.sh`: builds both modes and flashes them.
+- `CHANGELOG.md`: what changed in each version.
+- `AGENTS.md`: working notes and constraints for AI coding agents.

@@ -14,9 +14,10 @@
 // Kid-friendly controls:
 //   Big buttons: volume down, previous, play/pause, next, volume up
 //   The three touch zones above the screen are places: Listen / Play / Sleep
-//     Listen = the album picker (again = the player); Play = the game picker;
+//     Listen = up one level (player -> tracks -> albums -> shelves), hold = the player;
+//     Play = the game picker;
 //     Sleep again = start or extend the sleep timer
-//   Tap the song card: album covers (swipe up/down to page)
+//   Grids (albums, games) page sideways; lists scroll up/down
 //   Swipe right on the album covers or a song list: back
 //   Swipe the song card left/right: next / previous song
 //   Hold the top of the screen for 3 s: grown-ups screen (settings, Bluetooth/WiFi, stats)
@@ -58,7 +59,7 @@
 #endif
 
 // Declared up here so Arduino's auto-generated prototypes can see it.
-enum class Screen { Player, Albums, Tracks, Grownups, Spell, Math, Clock, Words, Pattern, Simon, Memory, Maze, Moles, PlayHome, Sleep };
+enum class Screen { Player, Shelves, Albums, Tracks, Grownups, Spell, Math, Clock, Words, Pattern, Simon, Memory, Maze, Moles, PlayHome, Sleep };
 struct RoundButton { int x, r; };
 // A quiz game's progress. Levels are played in rounds of 5 questions: 4+ right
 // on the first try levels up, 2 or fewer drops a level, 3 plays the level again.
@@ -76,7 +77,17 @@ struct Quiz {
   bool solved = false, started = false;
   uint32_t nextAt = 0;
 };
-struct Album { String name, path, coverFile; int8_t artistPrefixed = -1; };  // coverFile "" = none; -1 = not yet known
+struct Album {
+  String name, path, coverFile;  // coverFile "" = none
+  int8_t artistPrefixed = -1;    // -1 = not yet known
+  int shelf = 0;                 // index into shelves
+  int newCount = 0;              // podcast episodes nobody has started
+};
+// Listen's top level. Each top-level folder of albums is a shelf: /music, /podcasts and
+// /books have their own look; any other folder of albums gets a generic one.
+enum class ShelfKind : uint8_t { Music, Podcasts, Books, Other };
+struct Shelf { String name, path; ShelfKind kind; int albums = 0, newCount = 0; };
+struct ResumeEntry { String file; uint32_t pos; bool done; };  // books/podcasts: see "resume"
 
 // Screen upside down (USB port on top). The three touch buttons are detected in raw
 // panel coordinates, so after rotating they sit above the screen in C, B, A order:
@@ -250,6 +261,7 @@ static AudioFileSourceSD* file = nullptr;
 // Folders are read straight off the card (no index to go stale); an album's
 // tracks are listed only when it's opened.
 static std::vector<Album> albums;
+static std::vector<Shelf> shelves;
 static int playAlbum = -1;          // album whose tracks are in `tracks`
 static std::vector<String> tracks;  // tracks of the playing album
 static int current = -1;
@@ -304,6 +316,8 @@ static bool jpegSize(const String& path, int& w, int& h);
 static bool removePath(const String& path);
 static uint32_t fileSize(const String& path);
 static constexpr const char* COVER_CACHE = ".cover.rgb565";  // decoded cover, see "album covers"
+static constexpr int COVER_MASTER = 160;                      // ...160x160 RGB565 after this header:
+struct CoverCacheHeader { char magic[4]; uint32_t srcSize; };
 
 #if !CORE2_WIFI
 // ---------- Bluetooth device discovery (written from BT task) ----------
@@ -426,8 +440,9 @@ summary b{flex:1}.cur>summary{background:var(--row)}
 <button onclick="cmd('next')">&#9197;</button></div>
 <div class="ctl"><button onclick="cmd('voldown')">Vol &minus;</button><button onclick="cmd('volup')">Vol +</button></div>
 
-<h2>Add music</h2>
-<input type="text" id="album" list="albumlist" placeholder="Album name, e.g. Trolls (blank = loose songs)"><datalist id="albumlist"></datalist>
+<h2>Add music or books</h2>
+<div class="ctl"><select id="shelf" onchange="fillAlbumList()" style="flex:1"></select>
+<input type="text" id="album" list="albumlist" placeholder="Album or book name" style="flex:3"></div><datalist id="albumlist"></datalist>
 <div id="drop">Drop MP3s and a cover picture here, or <input type="file" id="pick" multiple accept=".mp3,audio/mpeg,image/*"></div>
 <progress id="prog" value="0" max="1" hidden></progress><div id="msg" class="dim"></div>
 
@@ -465,15 +480,28 @@ async function refreshNow(){const s=await (await fetch('/state')).json();
 async function cmd(c){await post('/cmd?c='+c);refreshNow();if(/album|track/.test(c))setTimeout(loadLib,300)}
 
 // ---------- library / organize ----------
+// Where uploads go: Music uses the library root (/music if the card has it); other shelves their folder.
+function shelfDir(){return $('shelf').value}
+function fillShelves(){const cur=$('shelf').value;
+ const opts=[{name:'Music',path:lib.root}].concat(lib.shelves.filter(sh=>sh.kind!='music'&&sh.kind!='podcasts'));
+ if(!opts.some(o=>o.path=='/books'))opts.splice(1,0,{name:'Books',path:'/books'});
+ $('shelf').innerHTML=opts.map(o=>`<option value="${esc(o.path)}">${esc(o.name)}</option>`).join('');
+ if(cur&&opts.some(o=>o.path==cur))$('shelf').value=cur;fillAlbumList()}
+function fillAlbumList(){const base=shelfDir();
+ $('albumlist').innerHTML=lib.albums.filter(a=>a.folder!=base&&dirOf(a.folder)==base).map(a=>`<option value="${esc(a.folder.split('/').pop())}">`).join('')}
 async function loadLib(){
  lib=await (await fetch('/library')).json();const s=await refreshNow();
  const open=new Set([...document.querySelectorAll('#lib details[open]')].map(d=>d.dataset.path));
- $('albumlist').innerHTML=lib.albums.filter(a=>a.folder!=lib.root).map(a=>`<option value="${esc(a.folder.split('/').pop())}">`).join('');
+ fillShelves();
  $('lib').innerHTML=lib.albums.length?'':'No albums yet.';
+ let lastShelf=-1;
  lib.albums.forEach((a,ai)=>{
+  const sh=lib.shelves[a.shelf]||{name:'',kind:'music'};
+  if(sh.kind=='podcasts')return;  // podcasts have their own section below
+  if(a.shelf!=lastShelf){lastShelf=a.shelf;const h=document.createElement('h3');h.textContent=sh.name;h.style.margin='14px 0 4px';$('lib').appendChild(h)}
   const d=document.createElement('details');d.dataset.path=a.folder;if(open.has(a.folder))d.open=true;
   if(ai==lib.playing)d.className='cur';
-  const cover=a.cover?`<img src="/file?path=${q(join(a.folder,a.cover))}&v=${a.coverSize}">`:'<span class="nocover"></span>';
+  const cover=a.cover?`<img loading="lazy" src="/cover?i=${ai}&v=${a.coverSize}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'nocover'}))">`:'<span class="nocover"></span>';
   const others=lib.albums.map((b,bi)=>bi==ai?'':`<option value="${bi}">${esc(b.name)}</option>`).join('');
   d.innerHTML=`<summary>${cover}<b>${esc(a.name)}</b><span class="dim">${a.tracks.length} songs</span></summary>
    <div class="abtn"><button onclick="cmd('album&i=${ai}')">&#9654; Play</button>
@@ -498,7 +526,7 @@ async function delTrack(ai,ti){const a=lib.albums[ai],t=a.tracks[ti];if(!confirm
 async function moveTrack(ai,ti,bi){if(bi==='')return;const a=lib.albums[ai],b=lib.albums[bi],t=a.tracks[ti];
  try{await post(`/mv?from=${q(join(a.folder,t.file))}&to=${q(join(b.folder,t.file))}`);afterChange(`Moved ${t.title} to ${b.name}`)}catch(e){alert('Move failed: '+e.message)}}
 async function newAlbum(){const n=prompt('Album name');if(!n||!safe(n))return;
- try{await post('/mkdir?path='+q(join(lib.root,safe(n))));$('album').value=safe(n);say(`Created ${safe(n)}. Drop songs above to fill it.`);loadLib()}catch(e){alert(e.message)}}
+ try{await post('/mkdir?path='+q(join(shelfDir(),safe(n))));$('album').value=safe(n);say(`Created ${safe(n)}. Drop songs above to fill it.`);loadLib()}catch(e){alert(e.message)}}
 async function setCover(ai,f){if(!f)return;const a=lib.albums[ai];
  try{const blob=await shrinkCover(f);if(a.cover)await post('/rm?path='+q(join(a.folder,a.cover)));
   await send(blob,'cover.jpg',a.folder);afterChange('Cover updated')}catch(e){alert('Cover failed: '+e)}}
@@ -512,7 +540,7 @@ function shrinkCover(blob){return new Promise((ok,bad)=>{const img=new Image();i
  c.width=c.height=160;const s=Math.min(img.width,img.height),g=c.getContext('2d');
  g.drawImage(img,(img.width-s)/2,(img.height-s)/2,s,s,0,0,160,160);URL.revokeObjectURL(img.src);c.toBlob(b=>b?ok(b):bad('cover'),'image/jpeg',0.85)};
  img.onerror=()=>bad('not an image');img.src=URL.createObjectURL(blob)})}
-async function upload(files){const name=safe($('album').value);files=[...files];const dir=name?join(lib.root,name):lib.root;
+async function upload(files){const name=safe($('album').value);files=[...files];const dir=name?join(shelfDir(),name):shelfDir();
  const songs=files.filter(f=>/\.mp3$/i.test(f.name)),cover=files.find(f=>f.type.startsWith('image/'));
  if(cover&&!name){say('Type an album name to add a cover.');return}
  if(!songs.length&&!cover)return;$('prog').hidden=false;
@@ -623,6 +651,13 @@ static String safeName(String s) {
 // New albums go in /music if the card uses that layout, else the card root.
 static String libraryRoot() { return SD.exists("/music") ? "/music" : "/"; }
 
+// Web handlers run inside loop(), so a slow request would starve the MP3 decoder.
+// Slow handlers call this between chunks of work to keep the music going.
+static void audioPump() {
+  if (!mp3 || !mp3->isRunning() || paused) return;
+  for (int i = 0; i < 8 && mp3->loop(); i++) {}
+}
+
 // Only paths inside the card, no "..".
 static bool okPath(const String& p) { return p.startsWith("/") && p.indexOf("..") < 0 && p.length() > 1; }
 
@@ -641,7 +676,7 @@ static void rescanKeepingPlace() {
     if (current >= 0) title = trackTitle(tracks[current], a);
     paused = true;
   }
-  if (screen == Screen::Albums || screen == Screen::Tracks) screen = Screen::Player;  // their indexes are stale now
+  if (screen == Screen::Albums || screen == Screen::Tracks || screen == Screen::Shelves) screen = Screen::Player;  // indexes are stale
   dirtyAll = true;
 }
 
@@ -995,6 +1030,7 @@ static String podcastJson() {
              num(syncState == SyncState::Download && syncTotal > 0 ? (int)(100LL * syncGot / syncTotal) : -1) +
              ",\"ago\":" + num(syncEverRan ? (millis() - syncLastRun) / 60000 : -1) + ",\"feeds\":[";
   for (size_t i = 0; i < feeds.size(); i++) {
+    audioPump();
     String dir = showFolder(feeds[i], i);
     j += (i ? ",{" : "{");
     j += "\"url\":\"" + jsonEscape(feeds[i].url) + "\",\"name\":\"" + jsonEscape(feeds[i].name) + "\",\"keep\":" + num(feeds[i].keep) +
@@ -1064,14 +1100,21 @@ static void setupWeb() {
   });
   // Everything the organize/cleanup UI needs: albums, songs with display titles, cover status, stray files.
   web.on("/library", HTTP_GET, [] {
-    String j = "{\"root\":\"" + jsonEscape(libraryRoot()) + "\",\"playing\":" + String(playAlbum) + ",\"albums\":[";
+    static const char* KIND[] = {"music", "podcasts", "books", "other"};
+    String j = "{\"root\":\"" + jsonEscape(libraryRoot()) + "\",\"playing\":" + String(playAlbum) + ",\"shelves\":[";
+    for (size_t i = 0; i < shelves.size(); i++)
+      j += String(i ? ",{" : "{") + "\"name\":\"" + jsonEscape(shelves[i].name) + "\",\"path\":\"" + jsonEscape(shelves[i].path) +
+           "\",\"kind\":\"" + KIND[(int)shelves[i].kind] + "\"}";
+    j += "],\"albums\":[";
     for (size_t a = 0; a < albums.size(); a++) {
+      audioPump();
       std::vector<String> list = (int)a == playAlbum ? tracks : listTracks(a);
       const String& cf = albums[a].coverFile;
       uint32_t coverSize = cf.length() ? fileSize(joinPath(albums[a].path, cf.c_str())) : 0;
       j += (a ? ",{" : "{");
       j += "\"name\":\"" + jsonEscape(albums[a].name) + "\",\"folder\":\"" + jsonEscape(albums[a].path) +
-           "\",\"cover\":\"" + jsonEscape(cf) + "\",\"coverSize\":" + String(coverSize) + ",\"tracks\":[";
+           "\",\"cover\":\"" + jsonEscape(cf) + "\",\"coverSize\":" + String(coverSize) + ",\"shelf\":" + String(albums[a].shelf) +
+           ",\"tracks\":[";
       for (size_t i = 0; i < list.size(); i++) {
         String fname = list[i].substring(list[i].lastIndexOf('/') + 1);
         j += (i ? ",{" : "{");
@@ -1114,6 +1157,40 @@ static void setupWeb() {
       if (!r) break;
       web.client().write(buf, r);
       sent += r;
+      audioPump();
+    }
+    f.close();
+  });
+  // An album's cover as a small BMP made from the decoded 160x160 copy the device keeps
+  // (.cover.rgb565), instead of the original image (which can be megabytes).
+  web.on("/cover", HTTP_GET, [] {
+    int a = web.arg("i").toInt();
+    File f = a >= 0 && a < (int)albums.size() ? SD.open(joinPath(albums[a].path, COVER_CACHE)) : File();
+    CoverCacheHeader h;
+    if (!f || f.read((uint8_t*)&h, sizeof h) != sizeof h || memcmp(h.magic, "C2C1", 4)) {
+      if (f) f.close();
+      web.send(404, "text/plain", "no cover yet");
+      return;
+    }
+    const uint32_t px = COVER_MASTER, img = px * px * 2, off = 14 + 40 + 12;
+    uint8_t hdr[off] = {'B', 'M'};
+    auto put32 = [&](int at, uint32_t v) { for (int k = 0; k < 4; k++) hdr[at + k] = v >> (8 * k); };
+    put32(2, off + img); put32(10, off);
+    put32(14, 40); put32(18, px); put32(22, (uint32_t)-(int32_t)px);  // negative height: rows top-down
+    hdr[26] = 1; hdr[28] = 16; put32(30, 3); put32(34, img);          // 16 bpp, BI_BITFIELDS
+    put32(54, 0xF800); put32(58, 0x07E0); put32(62, 0x001F);          // RGB565 masks
+    web.setContentLength(off + img);
+    web.sendHeader("Cache-Control", "max-age=3600");
+    web.send(200, "image/bmp", "");
+    web.client().write(hdr, off);
+    static uint8_t buf[4096];
+    for (uint32_t sent = 0; sent < img;) {
+      size_t r = f.read(buf, std::min<uint32_t>(sizeof buf, img - sent));
+      if (!r) break;
+      for (size_t k = 0; k + 1 < r; k += 2) std::swap(buf[k], buf[k + 1]);  // sprite is big-endian 565
+      web.client().write(buf, r);
+      sent += r;
+      audioPump();
     }
     f.close();
   });
@@ -1171,6 +1248,7 @@ static void setupWeb() {
              webFile = SD.open(webPath, FILE_WRITE);
              if (!webFile) webPath = "";
            } else if (up.status == UPLOAD_FILE_WRITE && webFile) {
+             audioPump();
              if (webFile.write(up.buf, up.currentSize) != up.currentSize) {
                webFile.close();
                SD.remove(webPath);
@@ -1245,40 +1323,81 @@ static int coverRank_(const char* n) {
   return 10;
 }
 
-// Adds `dirPath` as an album if it holds MP3s, then looks `depth` levels deeper.
-// Handles both "/Artist - Album/" and "/music/Artist - Album/" layouts.
-static void scanAlbums(const String& dirPath, const char* name, int depth) {
+// Lists a folder: whether it holds MP3s, its best cover image, and its subfolders.
+static bool scanFolder(const String& dirPath, std::vector<String>* subdirs, String& cover) {
   bool hasMp3 = false;
-  String cover;
   int coverRank = 99;
-  std::vector<String> subdirs;
+  cover = "";
   File dir = SD.open(dirPath);
-  if (!dir || !dir.isDirectory()) return;
+  if (!dir || !dir.isDirectory()) return false;
   while (File f = dir.openNextFile()) {
     const char* n = f.name();
-    if (f.isDirectory()) { if (depth > 0 && !isHidden(n)) subdirs.push_back(n); }
+    if (f.isDirectory()) { if (subdirs && !isHidden(n)) subdirs->push_back(n); }
     else if (isMp3(n)) hasMp3 = true;
     else if (int r = coverRank_(n); r < coverRank) { coverRank = r; cover = n; }
     f.close();
   }
   dir.close();
-  if (hasMp3) {
-    // loose songs in the card root or a "music" folder show up as "Songs"
-    bool loose = dirPath == "/" || !strcasecmp(name, "music");
-    albums.push_back({loose ? String("Songs") : prettyAlbumName(name), dirPath, cover});
-  }
-  for (auto& sub : subdirs) scanAlbums(joinPath(dirPath, sub.c_str()), sub.c_str(), depth - 1);
+  return hasMp3;
+}
+
+static int addShelf(const String& name, const String& path, ShelfKind kind) {
+  for (size_t i = 0; i < shelves.size(); i++)
+    if (shelves[i].path == path) return i;
+  shelves.push_back({name, path, kind});
+  return shelves.size() - 1;
 }
 
 static void clearCoverCache();
+static int countNewEpisodes(int a);
 static void rescanLibrary() {
   stopPlayback();
   albums.clear();
-  scanAlbums("/", "", 2);
+  shelves.clear();
+  // the three known shelves first, in this order; empty ones are dropped below
+  int music = addShelf("Music", "/music", ShelfKind::Music);
+  addShelf("Podcasts", "/podcasts", ShelfKind::Podcasts);
+  addShelf("Books", "/books", ShelfKind::Books);
+  std::vector<String> top;
+  String cover;
+  if (scanFolder("/", &top, cover)) albums.push_back({"Songs", "/", cover, -1, music});  // loose songs
+  std::sort(top.begin(), top.end(), lessCI);
+  for (auto& t : top) {
+    String path = joinPath("/", t.c_str()), lower = lowerStr(t);
+    std::vector<String> subs;
+    bool loose = scanFolder(path, &subs, cover);
+    bool known = lower == "music" || lower == "podcasts" || lower == "books";
+    int shelf = known ? addShelf(prettyAlbumName(t), path, lower == "music" ? ShelfKind::Music
+                                 : lower == "podcasts" ? ShelfKind::Podcasts : ShelfKind::Books)
+                      : -1;
+    if (loose) albums.push_back({lower == "music" ? String("Songs") : prettyAlbumName(t), path, cover, -1, known ? shelf : music});
+    for (auto& sub : subs) {
+      String sp = joinPath(path, sub.c_str());
+      if (!scanFolder(sp, nullptr, cover)) continue;
+      if (shelf < 0) shelf = addShelf(prettyAlbumName(t), path, ShelfKind::Other);  // a folder of albums = a shelf
+      albums.push_back({prettyAlbumName(sub), sp, cover, -1, shelf});
+    }
+  }
+  // drop empty shelves (renumbering), then order albums by shelf and name (loose songs last)
+  std::vector<int> remap(shelves.size(), -1);
+  std::vector<Shelf> kept;
+  for (size_t i = 0; i < shelves.size(); i++) {
+    bool used = false;
+    for (auto& al : albums) used |= al.shelf == (int)i;
+    if (used) { remap[i] = kept.size(); kept.push_back(shelves[i]); }
+  }
+  shelves = kept;
+  for (auto& al : albums) al.shelf = remap[al.shelf];
   std::sort(albums.begin(), albums.end(), [](const Album& a, const Album& b) {
-    bool la = a.name == "Songs", lb = b.name == "Songs";  // loose songs go last
+    if (a.shelf != b.shelf) return a.shelf < b.shelf;
+    bool la = a.name == "Songs", lb = b.name == "Songs";
     return la != lb ? lb : lessCI(a.name, b.name);
   });
+  for (size_t i = 0; i < albums.size(); i++) {
+    Shelf& sh = shelves[albums[i].shelf];
+    sh.albums++;
+    if (sh.kind == ShelfKind::Podcasts) sh.newCount += albums[i].newCount = countNewEpisodes(i);
+  }
   playAlbum = -1;
   tracks.clear();
   current = -1;
@@ -1368,6 +1487,71 @@ static String trackTitle(const String& path, int a) {
 
 static String albumName() { return playAlbum >= 0 ? albums[playAlbum].name : String(); }
 
+// ---------- resume (Books and Podcasts) ----------
+// Each book or show folder keeps a small ".resume" file: one "file<TAB>byte position<TAB>done"
+// line per track that has been started. It's saved every 15 s while playing, and on pause,
+// stop and track change, so a power-off loses at most ~15 s. Music doesn't resume.
+static constexpr const char* RESUME_FILE = ".resume";
+static std::vector<ResumeEntry> playResume;  // the playing album's entries
+static String playResumePath;
+static bool trackJustFinished = false;       // don't let stopPlayback() overwrite "done"
+
+static bool isResumable(int a) {
+  if (a < 0 || a >= (int)albums.size() || albums[a].shelf < 0 || albums[a].shelf >= (int)shelves.size()) return false;
+  ShelfKind k = shelves[albums[a].shelf].kind;
+  return k == ShelfKind::Books || k == ShelfKind::Podcasts;
+}
+
+static String fileName(const String& path) { return path.substring(path.lastIndexOf('/') + 1); }
+
+static std::vector<ResumeEntry> loadResume(const String& albumPath) {
+  std::vector<ResumeEntry> v;
+  File f = SD.open(joinPath(albumPath, RESUME_FILE));
+  while (f && f.available()) {
+    String line = f.readStringUntil('\n');
+    int a = line.indexOf('\t'), b = a < 0 ? -1 : line.indexOf('\t', a + 1);
+    if (b > a && a > 0) v.push_back({line.substring(0, a), (uint32_t)line.substring(a + 1, b).toInt(), line.substring(b + 1).toInt() == 1});
+  }
+  if (f) f.close();
+  return v;
+}
+
+static void saveResume(const String& albumPath, const std::vector<ResumeEntry>& v) {
+  File f = SD.open(joinPath(albumPath, RESUME_FILE), FILE_WRITE);
+  if (!f) return;
+  for (auto& e : v) f.printf("%s\t%u\t%d\n", e.file.c_str(), (unsigned)e.pos, e.done ? 1 : 0);
+  f.close();
+}
+
+static ResumeEntry* findResume(std::vector<ResumeEntry>& v, const String& f) {
+  for (auto& e : v) if (e.file == f) return &e;
+  return nullptr;
+}
+
+static std::vector<ResumeEntry>& resumeFor(int a) {
+  if (playResumePath != albums[a].path) { playResume = loadResume(albums[a].path); playResumePath = albums[a].path; }
+  return playResume;
+}
+
+static int countNewEpisodes(int a) {
+  auto v = loadResume(albums[a].path);
+  int n = 0;
+  for (auto& t : listTracks(a)) n += !findResume(v, fileName(t));
+  return n;
+}
+
+// Records where the playing track is, or that it played to the end.
+static void saveResumePos(bool finished) {
+  if (!file || current < 0 || current >= (int)tracks.size() || !isResumable(playAlbum)) return;
+  auto& v = resumeFor(playAlbum);
+  String f = fileName(tracks[current]);
+  ResumeEntry* e = findResume(v, f);
+  if (!e) { v.push_back({f, 0, false}); e = &v.back(); }
+  e->pos = finished ? 0 : file->getPos();
+  e->done = finished;
+  saveResume(albums[playAlbum].path, v);
+}
+
 // ---------- playback ----------
 static uint32_t be32(const uint8_t* b) { return (uint32_t)b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3]; }
 static uint32_t synchsafe(const uint8_t* b) { return (b[0] & 0x7F) << 21 | (b[1] & 0x7F) << 14 | (b[2] & 0x7F) << 7 | (b[3] & 0x7F); }
@@ -1410,6 +1594,7 @@ static String readId3Title(AudioFileSourceSD* f) {
 }
 
 static void stopPlayback() {
+  if (!trackJustFinished) saveResumePos(false);  // books/podcasts: remember the spot
   if (mp3 && mp3->isRunning()) mp3->stop();
   delete file; file = nullptr;
 }
@@ -1426,7 +1611,20 @@ static void playTrack(int i) {
   String tagTitle = readId3Title(file);
   title = tagTitle.length() ? cleanTitle(tagTitle, false, false) : trackTitle(tracks[i], playAlbum);
   if (isPodcastAlbum(playAlbum)) title = dropShowName(title, albums[playAlbum].name);
-  mp3->begin(file, &out);
+  if (isResumable(playAlbum)) {  // pick up where this track was left, a moment early
+    auto& v = resumeFor(playAlbum);
+    String f = fileName(tracks[i]);
+    ResumeEntry* e = findResume(v, f);
+    uint32_t start = file->getPos(), size = file->getSize();
+    if (e && !e->done && e->pos > start + 48000 && e->pos + 16000 < size) file->seek(e->pos - 24000, SEEK_SET);
+    if (!e) {  // first listen: no longer "new"
+      v.push_back({f, start, false});
+      saveResume(albums[playAlbum].path, v);
+      Album& al = albums[playAlbum];
+      if (al.newCount > 0) { al.newCount--; shelves[al.shelf].newCount--; }
+    }
+  }
+  mp3->begin(file, &out);  // the decoder finds the next frame on its own after a seek
   dirtyNow = dirtyHeader = true;
   songsPlayed++;
   prefs.putUInt("played", songsPlayed);
@@ -1449,6 +1647,7 @@ static void togglePause() {
   if (current < 0) return;
   if (paused && !(mp3 && mp3->isRunning())) { playTrack(current); return; }  // loaded but not started
   paused = !paused;
+  if (paused) saveResumePos(false);
   if (!paused && sleepSound) {  // music takes the output back from a calm sound
     sleepSound = 0;
     out.overrideRate(0);
@@ -1503,9 +1702,7 @@ static void switchMode(bool quiet) {
 // and saved next to it as ".cover.rgb565", so later boots skip the slow decode
 // (a big PNG can take seconds). Sizes shown on screen are scaled from that.
 // Progressive JPEGs aren't supported by the decoder; those albums show a color tile.
-static constexpr int COVER_MASTER = 160;
 static constexpr size_t COVER_BYTES = COVER_MASTER * COVER_MASTER * 2;
-struct CoverCacheHeader { char magic[4]; uint32_t srcSize; };
 
 static bool jpegSize(const String& path, int& w, int& h) {
   File f = SD.open(path);
@@ -1697,8 +1894,8 @@ static uint16_t albumColor(int i) {
 static constexpr int TOP_H = 22;
 static constexpr int CARD_X = 6, CARD_Y = 26, CARD_W = 308, CARD_H = 124, COVER = 108;
 static constexpr int PROG_Y = 158;
-static constexpr int BTN_Y = 204;
-static constexpr RoundButton B_VOLDN{32, 25}, B_PREV{96, 27}, B_PLAY{160, 32}, B_NEXT{224, 27}, B_VOLUP{288, 25};
+static constexpr int BTN_Y = 206;
+static constexpr RoundButton B_PREV{72, 26}, B_PLAY{160, 30}, B_NEXT{248, 26};  // volume is in the top bar
 
 static uint32_t lastTouchMs = 0, overlayUntil = 0;
 static bool dimmed = false;
@@ -1815,11 +2012,6 @@ static void iconSpeaker(int x, int y, uint16_t c) {  // spans x-8 .. x+7
   M5.Display.fillTriangle(x - 3, y, x + 7, y - 10, x + 7, y + 10, c);
   M5.Display.fillRect(x - 3, y - 5, 5, 10, c);
 }
-static void iconVolume(int x, int y, bool up, uint16_t c) {  // speaker + sign, centered
-  iconSpeaker(x - 7, y, c);
-  M5.Display.fillRoundRect(x + 4, y - 2, 12, 5, 2, c);
-  if (up) M5.Display.fillRoundRect(x + 8, y - 6, 5, 13, 2, c);
-}
 static void iconBattery(int x, int y, int pct, bool usb) {
   auto& d = M5.Display;
   uint16_t fill = pct > 50 ? rgb(80, 220, 100) : pct > 20 ? C_YELLOW : rgb(255, 70, 70);
@@ -1841,10 +2033,6 @@ static void iconWifi(int x, int y, uint16_t c) {
   for (int r = 4; r <= 12; r += 4) M5.Display.fillArc(x, y + 13, r, r - 2, 225, 315, c);
   M5.Display.fillCircle(x, y + 12, 2, c);
 }
-static void iconGrid(int x, int y, uint16_t c) {
-  for (int i = 0; i < 2; i++)
-    for (int j = 0; j < 2; j++) M5.Display.fillRoundRect(x + i * 9, y + j * 9, 7, 7, 2, c);
-}
 static void iconArrow(int x, int y, int dir, uint16_t c) {  // dir: 0 left, 1 right, 2 up, 3 down
   int s = 8;
   if (dir == 0) M5.Display.fillTriangle(x - s, y, x + s / 2, y - s, x + s / 2, y + s, c);
@@ -1854,27 +2042,34 @@ static void iconArrow(int x, int y, int dir, uint16_t c) {  // dir: 0 left, 1 ri
 }
 
 // ----- top bar: clock, connection, battery (hold 3 s for grown-ups) -----
-// USB plugged in? The AXP192's VBUS-present flag, not the VBUS voltage reading,
-// which can stay above 4 V for a while after unplugging.
-static bool usbPower() { return M5.Power.Axp192.isVBUS(); }
+// USB plugged in? On the Core2 the AXP192's VBUS flag and voltage stay up on battery
+// (the 5 V boost feeds that line), so go by the battery current instead: on USB it
+// charges or sits near 0; on its own the Core2 draws 100+ mA from it. Smoothed so a
+// moment of heavy load doesn't flicker the bolt.
+static bool usbPower() {
+  static uint32_t lastRead = 0;
+  static int drainCount = 0;
+  static bool usb = true;
+  if (millis() - lastRead >= 500 || !lastRead) {
+    lastRead = millis();
+    int ma = M5.Power.getBatteryCurrent();  // + charging, - draining
+    drainCount = ma < -40 ? std::min(drainCount + 1, 4) : std::max(drainCount - 1, 0);
+    usb = drainCount < 2;
+  }
+  return usb;
+}
 
-// Volume lives in the top bar on every screen: a speaker and a 3-bar meter. Tapping
+// Volume lives in the top bar on every screen: a speaker icon. Tapping
 // it opens a big volume panel over whatever is showing (closes after 3 s or a tap
 // outside). Holding the top bar still opens grown-ups.
-static constexpr int VOL_ICON_X = 212, VOL_TAP_X0 = 194, VOL_TAP_X1 = 242;
+static constexpr int VOL_ICON_X = 250, VOL_TAP_X0 = 234, VOL_TAP_X1 = 278;  // always there, so next to the battery
 static uint32_t volPopupUntil = 0;
 static constexpr int VP_X = 20, VP_Y = 54, VP_W = 280, VP_H = 134, VP_CY = 126, VP_R = 30;
 static constexpr int VP_MINUS_X = 66, VP_PLUS_X = 254;
 
 static void drawTopBarVolume() {
-  auto& d = M5.Display;
-  d.fillRect(VOL_ICON_X - 9, 2, 36, TOP_H - 4, C_BAR);
-  iconSpeaker(VOL_ICON_X, TOP_H / 2, volLevel ? C_WHITE : C_DIM);
-  for (int b = 0; b < 3; b++) {
-    int h = 4 + b * 3;
-    bool on = volLevel > b * 10 / 3;  // 1-3 one bar, 4-6 two, 7-10 three
-    d.fillRect(VOL_ICON_X + 11 + b * 4, TOP_H / 2 + 5 - h, 3, h, on ? C_WHITE : C_OFF);
-  }
+  M5.Display.fillRect(VOL_ICON_X - 9, 2, 36, TOP_H - 4, C_BAR);
+  iconSpeaker(VOL_ICON_X + 4, TOP_H / 2, C_WHITE);
 }
 
 static void drawVolumePopupLevel() {
@@ -1946,9 +2141,9 @@ static void drawTopBar() {
     d.drawString(hm, 8, TOP_H / 2);
   }
 #if CORE2_WIFI
-  iconWifi(254, 2, webUp ? C_WHITE : C_DIM);
+  iconWifi(224, 2, webUp ? C_WHITE : C_DIM);
 #else
-  if (btConnected) iconHeadphones(254, 2, C_WHITE);
+  if (btConnected) iconHeadphones(224, 2, C_WHITE);  // only when connected, so outermost
 #endif
   iconBattery(280, 4, M5.Power.getBatteryLevel(), usbPower());
   drawTopBarVolume();
@@ -1991,8 +2186,6 @@ static void drawCard() {
     cv->pushSprite(&d, CARD_X + 8, CARD_Y + 8, COVER_KEY);
     tx = CARD_X + 8 + COVER;
     tw = CARD_W - 8 - COVER;
-  } else {
-    iconGrid(CARD_X + 12, CARD_Y + 12, C_WHITE);
   }
   int cx = tx + tw / 2;
   eqCenter = cx;
@@ -2029,8 +2222,6 @@ static void drawButton(const RoundButton& b, uint16_t color) {
 static void drawControls() {
   auto& d = M5.Display;
   d.fillRect(0, BTN_Y - B_PLAY.r - 2, 320, 240 - (BTN_Y - B_PLAY.r - 2), C_BG);
-  drawButton(B_VOLDN, C_ORANGE);
-  iconVolume(B_VOLDN.x, BTN_Y, false, C_WHITE);
   drawButton(B_PREV, C_BLUE);
   iconSkip(B_PREV.x, BTN_Y, 24, false, C_WHITE);
   drawButton(B_PLAY, C_GREEN);
@@ -2038,8 +2229,6 @@ static void drawControls() {
   else iconPause(B_PLAY.x, BTN_Y, 26, C_WHITE);
   drawButton(B_NEXT, C_BLUE);
   iconSkip(B_NEXT.x, BTN_Y, 24, true, C_WHITE);
-  drawButton(B_VOLUP, C_ORANGE);
-  iconVolume(B_VOLUP.x, BTN_Y, true, C_WHITE);
 }
 
 static void showVolumeOverlay() {
@@ -2056,15 +2245,35 @@ static void showVolumeOverlay() {
 }
 
 // ----- albums -----
-// Square tiles, 3 across and 2 down, using the whole screen below the top bar.
-// The cover fills the tile; without one, the album name sits on the album's color.
-// The playing album gets a ring and a badge. Swipe up/down to page (dots at the
-// bottom); swipe right (or the Music button) goes back to the player, the same
-// "back" as on the song list.
-static constexpr int TILE = 100, TILE_GAP_X = 7, TILE_GAP_Y = 6, TILES = 6;
-static constexpr int GRID_X = 3, GRID_Y = 26;
+// A header naming the shelf ("< Music", tap to go back, page dots on the right), then
+// square tiles 3 across and 2 down. The cover fills the tile; without one, the album
+// name sits on the album's color. The playing album gets a ring and a badge.
+// Like every grid, it pages sideways; lists scroll up/down.
+static constexpr int AL_HEAD_H = 26, TILE = 90, TILE_GAP_X = 15, TILE_GAP_Y = 6, TILES = 6;
+static constexpr int GRID_X = 10, GRID_Y = TOP_H + 2 + AL_HEAD_H + 3;
+static uint16_t shelfColor(const Shelf& sh);
 
-static int albumPages() { return std::max<int>(1, (albums.size() + TILES - 1) / TILES); }
+static int viewShelf = 0;
+static std::vector<int> shelfAlbums;  // indexes into albums for viewShelf
+static int albumPages() { return std::max<int>(1, (shelfAlbums.size() + TILES - 1) / TILES); }
+
+static void showScreen(Screen s);
+// Opens a shelf's album grid on the page holding `focus` (an album index), if it's there.
+static void openShelf(int sh, int focus) {
+  viewShelf = shelves.empty() ? 0 : constrain(sh, 0, (int)shelves.size() - 1);
+  shelfAlbums.clear();
+  for (size_t i = 0; i < albums.size(); i++)
+    if (albums[i].shelf == viewShelf) shelfAlbums.push_back(i);
+  auto it = std::find(shelfAlbums.begin(), shelfAlbums.end(), focus);
+  albumsPage = it == shelfAlbums.end() ? 0 : (it - shelfAlbums.begin()) / TILES;
+  showScreen(Screen::Albums);
+}
+
+// Listen: the shelves (or straight to the albums when there's only one shelf).
+static void openListen() {
+  if (shelves.size() > 1) showScreen(Screen::Shelves);
+  else openShelf(0, playAlbum);
+}
 
 static void iconPlaying(int x, int y, uint16_t c) {  // three little equalizer bars
   M5.Display.fillRect(x - 6, y - 1, 3, 6, c);
@@ -2076,9 +2285,20 @@ static void drawAlbums() {
   auto& d = M5.Display;
   albumsPage = constrain(albumsPage, 0, albumPages() - 1);  // albums may have been deleted
   d.fillRect(0, TOP_H, 320, 240 - TOP_H, C_BG);
+  int hy = TOP_H + 2, hc = hy + AL_HEAD_H / 2;  // header: "< Shelf"  . . o .
+  d.fillRoundRect(6, hy, 308, AL_HEAD_H, 9, shelves.empty() ? C_BLUE : shelfColor(shelves[viewShelf]));
+  iconArrow(20, hc, 0, C_WHITE);
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  d.setTextDatum(middle_left);
+  d.setTextColor(C_WHITE);
+  d.drawString(shelves.empty() ? String("Music") : shelves[viewShelf].name, 36, hc);
+  int pages = albumPages();
+  for (int p = 0; p < pages && pages > 1 && p < 12; p++)
+    d.fillCircle(302 - (std::min(pages, 12) - 1 - p) * 11, hc, 3, p == albumsPage ? C_WHITE : rgb(20, 24, 50));  // on the shelf color
   for (int k = 0; k < TILES; k++) {
-    int a = albumsPage * TILES + k;
-    if (a >= (int)albums.size()) break;
+    int slot = albumsPage * TILES + k;
+    if (slot >= (int)shelfAlbums.size()) break;
+    int a = shelfAlbums[slot];
     int x = GRID_X + (k % 3) * (TILE + TILE_GAP_X), y = GRID_Y + (k / 3) * (TILE + TILE_GAP_Y);
     if (a == playAlbum)
       for (int t = 2; t <= 3; t++) d.drawRoundRect(x - t, y - t, TILE + 2 * t, TILE + 2 * t, 11 + t, C_WHITE);
@@ -2093,9 +2313,107 @@ static void drawAlbums() {
       iconPlaying(x + TILE - 14, y + TILE - 14, C_WHITE);
     }
   }
-  int pages = albumPages();
-  for (int p = 0; p < pages && pages > 1 && p < 20; p++)
-    d.fillCircle(160 - (std::min(pages, 20) - 1) * 6 + p * 12, 237, 2, p == albumsPage ? C_WHITE : C_DIM);
+}
+
+// ----- shelves: Listen's top level -----
+// Big tiles for Music, Podcasts, Books and any other shelf, each with an icon and a count;
+// Podcasts shows how many episodes are new. Up to 3 fill the screen as tall tiles.
+static uint16_t shelfColor(const Shelf& sh) {
+  switch (sh.kind) {
+    case ShelfKind::Music: return C_BLUE;
+    case ShelfKind::Podcasts: return rgb(138, 80, 236);
+    case ShelfKind::Books: return C_ORANGE;
+    default: return rgb(0, 170, 170);
+  }
+}
+
+static void drawShelfIcon(ShelfKind kind, int cx, int cy, uint16_t c, uint16_t bg) {
+  auto& d = M5.Display;
+  if (kind == ShelfKind::Music) {  // two beamed notes
+    d.fillEllipse(cx - 14, cy + 14, 9, 7, c);
+    d.fillEllipse(cx + 16, cy + 8, 9, 7, c);
+    d.fillRect(cx - 7, cy - 18, 4, 32, c);
+    d.fillRect(cx + 23, cy - 24, 4, 32, c);
+    d.fillTriangle(cx - 7, cy - 18, cx + 27, cy - 24, cx + 27, cy - 16, c);
+    d.fillTriangle(cx - 7, cy - 18, cx - 7, cy - 10, cx + 27, cy - 16, c);
+  } else if (kind == ShelfKind::Podcasts) {  // microphone
+    d.fillRoundRect(cx - 10, cy - 26, 20, 32, 10, c);
+    d.fillArc(cx, cy - 4, 19, 15, 0, 180, c);
+    d.fillRect(cx - 2, cy + 14, 5, 10, c);
+    d.fillRoundRect(cx - 12, cy + 23, 25, 4, 2, c);
+  } else if (kind == ShelfKind::Books) {  // an open book
+    d.fillTriangle(cx - 28, cy - 16, cx - 1, cy - 10, cx - 28, cy + 18, c);
+    d.fillTriangle(cx - 1, cy - 10, cx - 1, cy + 22, cx - 28, cy + 18, c);
+    d.fillTriangle(cx + 28, cy - 16, cx + 1, cy - 10, cx + 28, cy + 18, c);
+    d.fillTriangle(cx + 1, cy - 10, cx + 1, cy + 22, cx + 28, cy + 18, c);
+    for (int k = 0; k < 3; k++) {  // lines of text
+      d.drawLine(cx - 22, cy - 6 + k * 8, cx - 7, cy - 3 + k * 8, bg);
+      d.drawLine(cx + 7, cy - 3 + k * 8, cx + 22, cy - 6 + k * 8, bg);
+    }
+  } else {  // a folder
+    d.fillRoundRect(cx - 26, cy - 18, 22, 10, 3, c);
+    d.fillRoundRect(cx - 26, cy - 12, 52, 34, 5, c);
+  }
+}
+
+static void shelfTileRect(int i, int& x, int& y, int& w, int& h) {
+  int n = shelves.size();
+  if (n <= 3) {  // one row of tall tiles
+    w = (312 - (n - 1) * 7) / std::max(1, n);
+    h = 208;
+    x = 4 + i * (w + 7);
+    y = 26;
+  } else {       // 3 x 2 grid
+    w = 100; h = 100;
+    x = 3 + (i % 3) * 107;
+    y = 26 + (i / 3) * 107;
+  }
+}
+
+static void drawShelves() {
+  auto& d = M5.Display;
+  d.fillRect(0, TOP_H, 320, 240 - TOP_H, C_BG);
+  for (int i = 0; i < (int)shelves.size() && i < 6; i++) {
+    const Shelf& sh = shelves[i];
+    int x, y, w, h;
+    shelfTileRect(i, x, y, w, h);
+    uint16_t c = shelfColor(sh);
+    bool tall = h > 150, here = playAlbum >= 0 && albums[playAlbum].shelf == i;
+    if (here) for (int t = 2; t <= 3; t++) d.drawRoundRect(x - t, y - t, w + 2 * t, h + 2 * t, 18 + t, C_WHITE);
+    d.fillRoundRect(x, y, w, h, 18, c);
+    int cx = x + w / 2;
+    drawShelfIcon(sh.kind, cx, y + (tall ? 70 : 38), C_WHITE, c);
+    drawTitle(sh.name, cx, y + (tall ? 138 : 80), w - 10, tall ? 40 : 30, C_WHITE, true);
+    if (tall) {
+      const char* noun = sh.kind == ShelfKind::Podcasts ? "shows" : sh.kind == ShelfKind::Books ? "books" : "albums";
+      d.setFont(&fonts::FreeSansBold9pt7b);
+      d.setTextDatum(middle_center);
+      d.setTextColor(rgb(235, 240, 255));
+      d.drawString(String(sh.albums) + " " + (sh.albums == 1 ? String(noun).substring(0, strlen(noun) - 1) : String(noun)), cx, y + 172);
+    }
+    if (sh.newCount > 0) {  // new podcast episodes
+      String n = String(sh.newCount) + " new";
+      d.setFont(&fonts::FreeSansBold9pt7b);
+      int bw = d.textWidth(n) + 16;
+      d.fillRoundRect(x + w - bw - 6, y + 6, bw, 22, 11, C_YELLOW);
+      d.setTextDatum(middle_center);
+      d.setTextColor(C_SHADE);
+      d.drawString(n, x + w - 6 - bw / 2, y + 18);
+    }
+  }
+}
+
+static void handleShelves(const m5::touch_detail_t& t) {
+  if (!t.wasClicked()) return;
+  for (int i = 0; i < (int)shelves.size() && i < 6; i++) {
+    int x, y, w, h;
+    shelfTileRect(i, x, y, w, h);
+    if (t.x >= x - 3 && t.x < x + w + 3 && t.y >= y - 3 && t.y < y + h + 3) {
+      buzz();
+      openShelf(i, playAlbum >= 0 && albums[playAlbum].shelf == i ? playAlbum : -1);
+      return;
+    }
+  }
 }
 
 // ----- tracks -----
@@ -2106,12 +2424,40 @@ static constexpr int TR_HEAD_H = 34, TR_Y = TOP_H + TR_HEAD_H + 6;
 static int trRowH() { return isPodcastAlbum(viewAlbum) ? 58 : 35; }
 static int trRows() { return isPodcastAlbum(viewAlbum) ? 3 : 5; }
 
+static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown in the list
+
 static void openTracks(int a) {
   viewAlbum = a;
   viewTracks = (a == playAlbum) ? tracks : listTracks(a);
+  if (isResumable(a)) saveResumePos(false);  // so the playing track's bar is current
+  viewResume = isResumable(a) ? loadResume(albums[a].path) : std::vector<ResumeEntry>();
   tracksTop = (a == playAlbum && current >= 0) ? std::max(0, std::min(current - 1, (int)viewTracks.size() - trRows())) : 0;
   screen = Screen::Tracks;
   dirtyAll = true;
+}
+
+// Books and podcasts: NEW (podcast, never started), a thin bar (part heard), or a check (finished).
+static void drawProgressMark(int i, int x0, int y, int h, bool playing) {
+  if (!isResumable(viewAlbum)) return;
+  auto& d = M5.Display;
+  ResumeEntry* e = findResume(viewResume, fileName(viewTracks[i]));
+  if (!e) {
+    if (isPodcastAlbum(viewAlbum)) d.fillCircle(296, y + 9, 5, C_YELLOW);  // new
+    return;
+  }
+  if (e->done) {  // a check mark
+    uint16_t c = playing ? C_WHITE : C_GREEN;
+    d.drawWideLine(286, y + h / 2, 291, y + h / 2 + 5, 2.5f, c);
+    d.drawWideLine(291, y + h / 2 + 5, 300, y + h / 2 - 5, 2.5f, c);
+    return;
+  }
+  File f = SD.open(viewTracks[i]);
+  uint32_t size = f ? f.size() : 0;
+  if (f) f.close();
+  if (!size || e->pos == 0) return;
+  int w = 296 - x0, fill = std::min<int64_t>(w, (int64_t)w * e->pos / size);
+  d.fillRoundRect(x0, y + h - 7, w, 3, 1, playing ? rgb(255, 255, 255) : C_OFF);
+  d.fillRoundRect(x0, y + h - 7, std::max(3, fill), 3, 1, playing ? C_SHADE : C_YELLOW);
 }
 
 static void drawTracks() {
@@ -2160,6 +2506,7 @@ static void drawTracks() {
       d.setTextDatum(middle_left);
       d.setTextColor(C_WHITE);
       for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], 64, ty + k * lh);
+      drawProgressMark(i, 64, y, h, playing);
       continue;
     }
     d.fillCircle(24, my, 12, playing ? C_WHITE : C_OFF);
@@ -2173,7 +2520,8 @@ static void drawTracks() {
     d.setFont(&fonts::FreeSansBold12pt7b);
     d.setTextDatum(middle_left);
     d.setTextColor(C_WHITE);
-    d.drawString(fitLine(trackTitle(viewTracks[i], viewAlbum), 252), 44, my);
+    d.drawString(fitLine(trackTitle(viewTracks[i], viewAlbum), 236), 44, my);
+    drawProgressMark(i, 44, y, h, playing);
   }
   int n = viewTracks.size();
   if (n > rows) {  // scroll bar
@@ -3398,7 +3746,7 @@ static void serviceMoles() {
 }
 
 // ================= Play: the game picker (middle button) =================
-// A 3x2 grid of big game tiles (icon and name), swipe up/down for more. Inside a game, swipe right (or the middle button) comes back here.
+// A 3x2 grid of big game tiles (icon and name), swipe sideways for more. Inside a game, swipe right (or the middle button) comes back here.
 struct GameTile { const char* name; const char* icon; uint8_t r, g, b; Screen screen; };  // icon nullptr = drawn
 static const GameTile GAMES[] = {
     {"Missing Letter", "c_t", 255, 89, 140, Screen::Spell},
@@ -3487,7 +3835,7 @@ static void drawPlayHome() {
 
 static void handlePlayHome(const m5::touch_detail_t& t) {
   int dir;
-  if (flickedY(t, dir)) {  // swipe up = next page
+  if (flickedX(t, dir)) {  // swipe left = next page (this is a top-level place: nothing to go "back" to)
     int pg = constrain(gamesPage + dir, 0, gamePages() - 1);
     if (pg != gamesPage) { buzz(); gamesPage = pg; drawPlayHome(); }
     return;
@@ -4124,6 +4472,7 @@ static void redraw() {
       dirtyNow = true;
     }
     else if (screen == Screen::Albums) drawAlbums();
+    else if (screen == Screen::Shelves) drawShelves();
     else if (screen == Screen::Tracks) drawTracks();
     else if (isQuiz(screen)) drawQuiz(screen);
     else if (screen == Screen::PlayHome) drawPlayHome();
@@ -4170,28 +4519,24 @@ static void handlePlayer(const m5::touch_detail_t& t) {
   }
   else if (hit(B_PREV, t.x, t.y)) { buzz(); playTrack(current - 1); }
   else if (hit(B_NEXT, t.x, t.y)) { buzz(); playTrack(current + 1); }
-  else if (hit(B_VOLDN, t.x, t.y)) { buzz(); setVolLevel(volLevel - 1); }
-  else if (hit(B_VOLUP, t.x, t.y)) { buzz(); setVolLevel(volLevel + 1); }
-  else if (t.y > CARD_Y && t.y < CARD_Y + CARD_H && !albums.empty()) {
-    buzz();
-    albumsPage = std::max(0, playAlbum) / TILES;
-    showScreen(Screen::Albums);
-  }
 }
+
+// Back from the albums: the shelves, or the player when there's only one shelf.
+static void albumsBack() { buzz(); showScreen(shelves.size() > 1 ? Screen::Shelves : Screen::Player); }
 
 static void handleAlbums(const m5::touch_detail_t& t) {
   int dir;
-  if (flickedY(t, dir)) {  // swipe up = next page
+  if (flickedX(t, dir)) {  // swipe left = next page
     int p = constrain(albumsPage + dir, 0, albumPages() - 1);
     if (p != albumsPage) { buzz(); albumsPage = p; dirtyAll = true; }
     return;
   }
-  if (flickedX(t, dir) && dir < 0) { buzz(); showScreen(Screen::Player); return; }  // swipe right = back
   if (!t.wasClicked()) return;
-  if (t.x < GRID_X - 3 || t.y < GRID_Y - 4) return;
+  if (t.y < GRID_Y - 4) { if (t.y >= TOP_H) albumsBack(); return; }  // the header
+  if (t.x < GRID_X - 6) return;
   int col = (t.x - GRID_X + TILE_GAP_X / 2) / (TILE + TILE_GAP_X), row = (t.y - GRID_Y + TILE_GAP_Y / 2) / (TILE + TILE_GAP_Y);
-  int a = albumsPage * TILES + row * 3 + col;
-  if (col <= 2 && row <= 1 && a < (int)albums.size()) { buzz(); openTracks(a); }
+  int slot = albumsPage * TILES + row * 3 + col;
+  if (col <= 2 && row <= 1 && slot < (int)shelfAlbums.size()) { buzz(); openTracks(shelfAlbums[slot]); }
 }
 
 static void handleTracks(const m5::touch_detail_t& t) {
@@ -4199,7 +4544,7 @@ static void handleTracks(const m5::touch_detail_t& t) {
     int top = constrain(tracksTop + by, 0, std::max(0, (int)viewTracks.size() - trRows()));
     if (top != tracksTop) { buzz(); tracksTop = top; dirtyAll = true; }
   };
-  auto back = [&] { buzz(); albumsPage = viewAlbum / TILES; showScreen(Screen::Albums); };
+  auto back = [&] { buzz(); openShelf(albums[viewAlbum].shelf, viewAlbum); };
   int dir;
   if (flickedY(t, dir)) { scroll(dir * (trRows() - 1)); return; }  // keep one row for context
   if (flickedX(t, dir) && dir < 0) { back(); return; }            // swipe right = back
@@ -4239,7 +4584,7 @@ static void handleInput() {
   // hold the top of the screen for 3 seconds -> grown-ups screen
   static bool holdArmed = false;
   static uint32_t lastHoldDraw = 0;
-  bool listScreen = screen == Screen::Albums || screen == Screen::Tracks || screen == Screen::PlayHome ||
+  bool listScreen = screen == Screen::Albums || screen == Screen::Tracks || screen == Screen::PlayHome || screen == Screen::Shelves ||
                     screen == Screen::Memory || screen == Screen::Maze || screen == Screen::Moles;  // content right under the bar
   if (t.isPressed() && t.base_y < (listScreen ? TOP_H + 2 : HOLD_ZONE) && screen != Screen::Grownups) {
     uint32_t held = millis() - t.base_msec;
@@ -4274,16 +4619,29 @@ static void handleInput() {
     return;
   }
 
+  // hold Listen: straight to the player, from anywhere
+  if (BTN_LEFT.wasHold()) {
+    buzz();
+    if (screen != Screen::Player) showScreen(Screen::Player);
+    return;
+  }
+
   // the three touch buttons pick the activity
   int pick = BTN_LEFT.wasClicked() ? 0 : M5.BtnB.wasClicked() ? 1 : BTN_RIGHT.wasClicked() ? 2 : -1;
   if (pick >= 0) {
     buzz();
-    if (pick == 0) {  // Listen: the album picker (on the page with the playing album); again: the player
-      if (screen != Screen::Albums) {
-        albumsPage = std::max(0, playAlbum) / TILES;
-        showScreen(Screen::Albums);
+    if (pick == 0) {  // Listen = up one level: player -> its tracks -> albums -> shelves -> player
+      if (screen == Screen::Player) {
+        if (playAlbum >= 0) openTracks(playAlbum);
+        else openListen();
+      } else if (screen == Screen::Tracks) {
+        openShelf(albums[viewAlbum].shelf, viewAlbum);
+      } else if (screen == Screen::Albums && shelves.size() > 1) {
+        showScreen(Screen::Shelves);
+      } else if (screen == Screen::Shelves || screen == Screen::Albums) {
+        // already at the top of Listen (the buzz above says "got it"; hold Listen for the player)
       } else {
-        showScreen(Screen::Player);
+        showScreen(Screen::Player);  // from Play / Sleep / grown-ups
       }
     } else if (pick == 1) {  // Play: the game picker (also from inside a game)
       if (screen != Screen::PlayHome) showScreen(Screen::PlayHome);
@@ -4308,6 +4666,7 @@ static void handleInput() {
     case Screen::Sleep: handleSleep(t); break;
     case Screen::Player: handlePlayer(t); break;
     case Screen::Albums: handleAlbums(t); break;
+    case Screen::Shelves: handleShelves(t); break;
     case Screen::Tracks: handleTracks(t); break;
     case Screen::Grownups: handleGrownups(t); break;
   }
@@ -4543,6 +4902,8 @@ void setup() {
   cfg.serial_baudrate = 460800;  // the Core2's CH9102 garbles 921600
   M5.begin(cfg);
   M5.Display.setRotation(ROTATION);
+  M5.BtnA.setHoldThresh(600);  // hold Listen (A or C, depending on rotation) for the player
+  M5.BtnC.setHoldThresh(600);
   prefs.begin("core2mp3");  // settings namespace from the project's first name; renaming it would reset them
   bool nightBoot = prefs.getUChar("nightboot", 0);  // a quiet reboot for the nightly podcast sync
   M5.Display.setBrightness(nightBoot ? 0 : 140);   // the saved brightness is applied below
@@ -4633,7 +4994,20 @@ void loop() {
   M5.update();
   handleSerial();
 
-  if (mp3->isRunning() && !paused && !mp3->loop()) playTrack(current + 1);
+  if (mp3->isRunning() && !paused && !mp3->loop()) {  // track finished
+    trackJustFinished = true;
+    saveResumePos(true);
+    if (isResumable(playAlbum) && current + 1 >= (int)tracks.size()) {  // end of the book / last episode: stop
+      stopPlayback();
+      paused = true;
+      dirtyNow = true;
+    } else {
+      playTrack(current + 1);
+    }
+    trackJustFinished = false;
+  }
+  static uint32_t lastResumeSave = 0;
+  if (musicIsPlaying() && isResumable(playAlbum) && millis() - lastResumeSave > 15000) { lastResumeSave = millis(); saveResumePos(false); }
 
 #if CORE2_WIFI
   wifiLoop();

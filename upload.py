@@ -8,6 +8,7 @@ from an image in the folder, or from art embedded in the MP3s, shrunk to 160x160
     PY=~/.venvs/esp/bin/python
     $PY upload.py "~/Music/Fleetwood Mac - Rumours"        # upload an album folder
     $PY upload.py --album "Kids Songs" a.mp3 b.mp3          # loose files into an album
+    $PY upload.py --shelf books "~/Audiobooks/Charlotte's Web"  # an audiobook (resumes where it stopped)
     $PY upload.py --ls                                      # what's on the card
     $PY upload.py --mv "/music/Landslide.mp3" "/Fleetwood Mac - The Dance/Landslide.mp3"
     $PY upload.py --rm /music                               # delete a file or album
@@ -272,6 +273,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="*", help="album folders and/or MP3 files")
     ap.add_argument("--album", help='album folder name for loose MP3s, e.g. "Artist - Album" (default: card root)')
+    ap.add_argument("--shelf", help='shelf folder to upload into, e.g. "books" (default: music)')
     ap.add_argument("--ls", action="store_true", help="list what's on the card")
     ap.add_argument("--mv", nargs=2, metavar=("FROM", "TO"), help="move/rename a file or album on the card")
     ap.add_argument("--rm", metavar="PATH", help="delete a file or a whole album folder on the card")
@@ -326,8 +328,12 @@ def main():
     use_http = mode == "wifi" and ip and not args.usb
     print(f"Uploading over {'WiFi to ' + ip if use_http else 'USB'}")
 
-    # new albums go next to the existing ones: /music/<album> if the card uses /music
-    root = "/music" if any(p.startswith("/music/") for p in existing) else ""
+    # new albums go next to the existing ones: /music/<album> if the card uses /music,
+    # or into another shelf (e.g. --shelf books -> /books/<book>)
+    if args.shelf and args.shelf.strip("/").lower() != "music":
+        root = "/" + safe_name(args.shelf.strip("/").lower())
+    else:
+        root = "/music" if any(p.startswith("/music/") for p in existing) else ""
 
     def send(data, album, name):
         remote = root + (f"/{album}" if album else "") + f"/{name}"
