@@ -1652,13 +1652,14 @@ static void prepareCovers() {
     if (albums[a].coverFile.length() && !coverCacheCurrent(albums[a])) todo.push_back(a);
   for (size_t i = 0; i < todo.size(); i++) {
     auto& d = M5.Display;
-    d.fillRect(0, 90, 320, 70, rgb(18, 22, 48));
+    d.fillRect(0, 176, 320, 46, rgb(18, 22, 48));  // under the splash title
     d.setFont(&fonts::FreeSansBold12pt7b);
     d.setTextColor(TFT_WHITE);
     d.setTextDatum(middle_center);
-    d.drawString("Getting album pictures ready", 160, 108);
-    d.fillRoundRect(40, 132, 240, 12, 6, rgb(40, 46, 80));
-    d.fillRoundRect(40, 132, std::max<int>(12, 240 * (i + 1) / todo.size()), 12, 6, rgb(255, 210, 0));
+    d.setFont(&fonts::FreeSansBold9pt7b);
+    d.drawString("Getting album pictures ready", 160, 188);
+    d.fillRoundRect(40, 204, 240, 10, 5, rgb(40, 46, 80));
+    d.fillRoundRect(40, 204, std::max<int>(10, 240 * (i + 1) / todo.size()), 10, 5, rgb(255, 210, 0));
     delete loadCoverMaster(albums[todo[i]]);
   }
 }
@@ -4395,6 +4396,48 @@ static void handleSerial() {
   }
 }
 
+// ---------- startup splash ----------
+// "Tiny Tunes" in rainbow letters with music notes, shown while the card loads (at least 5 s).
+static constexpr uint32_t SPLASH_MS = 5000;
+
+static void drawNote(int x, int y, int s, uint16_t c) {  // an eighth note; (x, y) = note head
+  auto& d = M5.Display;
+  d.fillEllipse(x, y, s * 6 / 10, s * 45 / 100, c);
+  d.fillRect(x + s * 45 / 100, y - s * 2, std::max(2, s / 5), s * 2, c);
+  d.fillTriangle(x + s * 45 / 100, y - s * 2, x + s * 45 / 100 + s * 7 / 10, y - s * 13 / 10, x + s * 45 / 100, y - s * 14 / 10, c);
+}
+
+static void drawSplash() {
+  auto& d = M5.Display;
+  d.fillScreen(C_BG);
+  static const uint8_t RAINBOW[][3] = {{255, 89, 94}, {255, 146, 76}, {250, 205, 40}, {80, 210, 110}, {25, 170, 230}, {150, 100, 240}, {255, 100, 170}};
+  const char* text = "Tiny Tunes";
+  d.setFont(&fonts::FreeSansBold24pt7b);
+  d.setTextSize(1.25f);
+  d.setTextDatum(middle_left);
+  int x = 160 - d.textWidth(text) / 2, y = 112, k = 0;
+  for (const char* p = text; *p; p++) {
+    char ch[2] = {*p, 0};
+    if (*p != ' ') {
+      const uint8_t* c = RAINBOW[k++ % 7];
+      d.setTextColor(C_SHADE);
+      d.drawString(ch, x + 2, y + 3);
+      d.setTextColor(rgb(c[0], c[1], c[2]));
+      d.drawString(ch, x, y);
+    }
+    x += d.textWidth(ch);
+  }
+  d.setTextSize(1);
+  drawNote(42, 60, 14, rgb(250, 205, 40));
+  drawNote(272, 52, 12, rgb(25, 170, 230));
+  drawNote(286, 160, 10, rgb(255, 100, 170));
+  drawNote(30, 168, 11, rgb(80, 210, 110));
+  d.setFont(&fonts::DejaVu9);
+  d.setTextDatum(bottom_center);
+  d.setTextColor(C_DIM);
+  d.drawString(String(TT_VERSION) + (CORE2_WIFI ? "  WiFi mode" : ""), 160, 238);
+}
+
 void setup() {
   Serial.setRxBufferSize(UP_CHUNK * 4);
   auto cfg = M5.config();
@@ -4428,12 +4471,13 @@ void setup() {
   }
   M5.Speaker.begin();
 
-  drawTitle("Loading songs...", 160, 120, 300, 60, C_WHITE);
+  uint32_t splashAt = millis();
+  drawSplash();  // stays up while the card loads
 
   bool sdOk = false;
   for (int tries = 0; tries < 10 && !(sdOk = SD.begin(SD_CS, SPI, 25000000)); tries++) delay(300);
-  M5.Display.fillScreen(C_BG);
   if (!sdOk) {
+    M5.Display.fillScreen(C_BG);
     Serial.println("ERR no SD card");
     drawTitle("Oops! The music card is missing. Ask a grown-up.", 160, 120, 290, 120, rgb(255, 120, 120));
     while (true) delay(1000);
@@ -4441,6 +4485,7 @@ void setup() {
 
   rescanLibrary();
   prepareCovers();
+  while (!nightBoot && millis() - splashAt < SPLASH_MS) delay(10);  // splash for at least 5 s (not on dark night boots)
   M5.Display.fillScreen(C_BG);
   Serial.printf("READY %s %u albums %s\n", CORE2_WIFI ? "wifi" : "bt", (unsigned)albums.size(), TT_VERSION);
 
