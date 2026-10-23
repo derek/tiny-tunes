@@ -138,7 +138,28 @@ extern "C" tm* gmtime_r(const time_t* tp, tm* r) {
 extern "C" tm* localtime_r(const time_t* tp, tm* r) { return gmtime_r(tp, r); }
 
 static constexpr int BT_RATE = 44100;  // A2DP SBC is fixed at 44.1 kHz stereo
-static BluetoothA2DPSource a2dp;
+// The library looks for devices non-stop while nothing is connected, which costs a
+// steady chunk of battery. Here it scans continuously only while the grown-ups
+// Bluetooth tab is open (pairing), and otherwise in one short burst a minute, which
+// is still enough for the saved headphones to reconnect when they're switched on.
+class TinyA2DP : public BluetoothA2DPSource {
+ public:
+  void continuousScan(bool on) {  // the library restarts a finished scan unless is_end
+    is_end = !on;
+    if (on) scanBurst();
+  }
+  void scanBurst() {  // one ~13 s look-around
+    if (discovery_active || is_connected()) return;
+    if (s_a2d_state != APP_AV_STATE_DISCOVERING && s_a2d_state != APP_AV_STATE_UNCONNECTED) return;  // busy connecting
+    s_a2d_state = APP_AV_STATE_DISCOVERING;
+    esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+  }
+  bool isSaved(const uint8_t* addr) {  // the last headphones/speaker we connected to
+    static const uint8_t none[ESP_BD_ADDR_LEN] = {0};
+    return memcmp(last_connection, none, ESP_BD_ADDR_LEN) && !memcmp(addr, last_connection, ESP_BD_ADDR_LEN);
+  }
+};
+static TinyA2DP a2dp;
 
 // ---------- ring buffer: decoder (loop task) -> A2DP callback (BT task) ----------
 // Single producer / single consumer, so atomics on head/tail are enough.
@@ -353,7 +374,7 @@ static bool onBtDeviceFound(const char* name, esp_bd_addr_t addr, int rssi) {
   } else if (it != btFound.end()) {
     it->rssi = rssi;
   }
-  bool connect = btHasTarget && !memcmp(addr, btTarget, ESP_BD_ADDR_LEN);
+  bool connect = btHasTarget ? !memcmp(addr, btTarget, ESP_BD_ADDR_LEN) : a2dp.isSaved(addr);
   if (connect) btName = name;
   xSemaphoreGive(btLock);
   connectDirty = true;
@@ -705,6 +726,7 @@ static int32_t syncTotal = 0, syncGot = 0;
 static struct {
   String tag, text, chanTitle, chanImage;
   bool inTag = false, inItem = false, inImage = false, done = false;
+  char prev1 = 0, prev2 = 0;  // last two characters of the current tag (spots "]]>" past the buffer cap)
   Episode cur;
   std::vector<Episode> items;
   int want = 5;
@@ -790,7 +812,7 @@ static String isoDate(const String& rfc) {
 }
 
 static void rssTag(String tag) {
-  if (tag.startsWith("![CDATA[")) { rss.text += tag.substring(8, tag.length() - 2); return; }
+  if (tag.startsWith("![CDATA[")) { rss.text += tag.substring(8, tag.endsWith("]]") ? tag.length() - 2 : tag.length()); return; }
   bool closing = tag.startsWith("/");
   String name = closing ? tag.substring(1) : tag;
   int sp = name.indexOf(' ');
@@ -823,12 +845,16 @@ static void rssTag(String tag) {
 static void rssChar(char c) {
   if (rss.done) return;
   if (rss.inTag) {
+    // A CDATA block (often a long HTML description) ends at "]]>", which may come long
+    // after the buffer stops growing, so watch the last two characters separately.
     bool cdata = rss.tag.startsWith("![CDATA[");
-    if (c == '>' && (!cdata || rss.tag.endsWith("]]"))) { rssTag(rss.tag); rss.tag = ""; rss.inTag = false; }
+    if (c == '>' && (!cdata || (rss.prev1 == ']' && rss.prev2 == ']'))) { rssTag(rss.tag); rss.tag = ""; rss.inTag = false; }
     else if (rss.tag.length() < 1500) rss.tag += c;
+    rss.prev2 = rss.prev1;
+    rss.prev1 = c;
     return;
   }
-  if (c == '<') { rss.inTag = true; rss.tag = ""; return; }
+  if (c == '<') { rss.inTag = true; rss.tag = ""; rss.prev1 = rss.prev2 = 0; return; }
   if (rss.text.length() < 400) rss.text += c;
 }
 
@@ -1635,7 +1661,8 @@ static void stopPlayback() {
   delete file; file = nullptr;
 }
 
-static uint32_t forceStartPos = 0;  // recovering from a damaged spot: start here instead
+static uint32_t forceStartPos = 0;  // recovering from a damaged spot, or seeking: start here instead
+static uint32_t trackAudioStart = 0;  // byte where the audio begins (after the ID3 tag)
 static int recoverTries = 0;
 
 static void playTrack(int i) {
@@ -1663,6 +1690,7 @@ static void playTrack(int i) {
   }
   missing = 0;
   String tagTitle = readId3Title(file);
+  trackAudioStart = file->getPos();
   title = tagTitle.length() ? cleanTitle(tagTitle, false, false) : trackTitle(tracks[i], playAlbum);
   if (isPodcastAlbum(playAlbum)) title = dropShowName(title, albums[playAlbum].name);
   if (isResumable(playAlbum)) {  // pick up where this track was left, a moment early
@@ -1697,6 +1725,17 @@ static void playAlbumTrack(int a, int t) {
     current = -1;
   }
   playTrack(t);
+}
+
+// Jumps to `frac` (0..1) of the current song's audio, and plays.
+static void seekTo(float frac) {
+  if (current < 0 || tracks.empty()) return;
+  uint32_t size = file ? file->getSize() : fileSize(tracks[current]);
+  uint32_t start = file ? trackAudioStart : 0;
+  if (size <= start) return;
+  forceStartPos = std::max<uint32_t>(start + 1, start + (uint32_t)(constrain(frac, 0.0f, 0.995f) * (size - start)));
+  recoverTries = 0;
+  playTrack(current);
 }
 
 static void togglePause() {
@@ -1949,7 +1988,7 @@ static uint16_t albumColor(int i) {
 
 static constexpr int TOP_H = 22;
 static constexpr int CARD_X = 6, CARD_Y = 26, CARD_W = 308, CARD_H = 124, COVER = 108;
-static constexpr int PROG_Y = 158;
+static constexpr int PROG_Y = 156, PROG_H = 14, PROG_X = 18, PROG_W = 284;  // seekable: drag or tap
 static constexpr int BTN_Y = 206;
 static constexpr RoundButton B_PREV{72, 26}, B_PLAY{160, 30}, B_NEXT{248, 26};  // volume is in the top bar
 
@@ -2260,14 +2299,21 @@ static void drawCard() {
   drawEqualizer(false);
 }
 
-static void drawProgress() {
+static bool seekDragging = false;  // a finger is on the progress bar
+
+static void drawProgressAt(int p) {  // p: knob offset into the bar, 0..PROG_W
   auto& d = M5.Display;
-  int x = 18, w = 284, h = 10;
-  int p = (file && file->getSize() > 0) ? (int64_t)w * file->getPos() / file->getSize() : 0;
-  d.fillRect(x - 9, PROG_Y - 4, w + 18, h + 8, C_BG);
+  int x = PROG_X, w = PROG_W, h = PROG_H;
+  p = constrain(p, 0, w);
+  d.fillRect(x - 11, PROG_Y - 4, w + 22, h + 8, C_BG);
   d.fillRoundRect(x, PROG_Y, w, h, h / 2, C_OFF);
   if (p > 0) d.fillRoundRect(x, PROG_Y, std::max(p, h), h, h / 2, albumColor(playAlbum));
-  d.fillCircle(x + p, PROG_Y + h / 2, 8, C_WHITE);
+  d.fillCircle(x + p, PROG_Y + h / 2, seekDragging ? 11 : 10, C_WHITE);
+}
+
+static void drawProgress() {
+  if (seekDragging) return;  // the finger's preview wins
+  drawProgressAt((file && file->getSize() > 0) ? (int64_t)PROG_W * file->getPos() / file->getSize() : 0);
 }
 
 static void drawButton(const RoundButton& b, uint16_t color) {
@@ -4578,6 +4624,20 @@ static bool flickedY(const m5::touch_detail_t& t, int& dir) {
 }
 
 static void handlePlayer(const m5::touch_detail_t& t) {
+  static int seekX = 0;
+  bool inSeekZone = t.base_y >= CARD_Y + CARD_H + 1 && t.base_y < PROG_Y + PROG_H + 6 && current >= 0;
+  if (t.isPressed() && inSeekZone) {  // finger on the bar: the knob follows it
+    seekDragging = true;
+    seekX = t.x;
+    drawProgressAt(t.x - PROG_X);
+    return;
+  }
+  if (seekDragging) {  // let go: jump there
+    seekDragging = false;
+    buzz();
+    seekTo((float)(seekX - PROG_X) / PROG_W);
+    return;
+  }
   int dir;
   if (t.base_y > CARD_Y && t.base_y < CARD_Y + CARD_H && flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }
   if (!t.wasClicked()) return;
@@ -5041,6 +5101,7 @@ void setup() {
   a2dp.set_auto_reconnect(true);
   a2dp.set_data_callback_in_frames(btGetFrames);
   a2dp.start();
+  a2dp.continuousScan(false);  // scan in bursts (see TinyA2DP)
 #endif
   applyVolume();
 
@@ -5097,6 +5158,13 @@ void loop() {
 #if CORE2_WIFI
   wifiLoop();
 #else
+  {  // Bluetooth scanning: continuous on the grown-ups Bluetooth tab, else a burst a minute
+    static bool continuous = false;
+    static uint32_t lastBurst = 0;
+    bool pairing = screen == Screen::Grownups && guTab == 1;
+    if (pairing != continuous) { continuous = pairing; a2dp.continuousScan(pairing); }
+    if (!pairing && !btConnected && millis() - lastBurst > 60000) { lastBurst = millis(); a2dp.scanBurst(); }
+  }
   if (btStateDirty) {
     btStateDirty = false;
     if (btConnected) M5.Speaker.stop(SPK_CH);

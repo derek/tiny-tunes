@@ -6,6 +6,23 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.4.2 — 2026-10-23
+
+### Added
+- Seek within a song: drag the (now bigger) progress bar, or tap a spot on it.
+
+### Fixed
+- Podcast feeds with long show or episode descriptions (e.g. Yoto Daily) were
+  read as having "no MP3 episodes".
+- Saved headphones switched on later now reconnect by themselves (before, only
+  in the first moments after power-on).
+
+### Changed
+- Battery: Bluetooth looks for new devices continuously only while the grown-ups
+  Bluetooth tab is open; otherwise it checks in a short burst once a minute.
+  Measured idle on battery: ~80–140 mA, down from ~120–180 mA in 0.4.0 (together
+  with 0.4.1's idle CPU rest).
+
 ## 0.4.1 — 2026-10-23
 
 ### Fixed
