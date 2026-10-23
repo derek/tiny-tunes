@@ -58,7 +58,7 @@
 #endif
 
 // Declared up here so Arduino's auto-generated prototypes can see it.
-enum class Screen { Player, Albums, Tracks, Grownups, Spell, Math, Clock, Words, PlayHome, Sleep };
+enum class Screen { Player, Albums, Tracks, Grownups, Spell, Math, Clock, Words, Pattern, Simon, Memory, Maze, Moles, PlayHome, Sleep };
 struct RoundButton { int x, r; };
 // A quiz game's progress. Levels are played in rounds of 5 questions: 4+ right
 // on the first try levels up, 2 or fewer drops a level, 3 plays the level again.
@@ -264,6 +264,8 @@ static Screen screen = Screen::Player;  // which screen is showing
 static int songCountCache = -1;  // stats page; reset when the library changes
 static uint32_t listenSec = 0, songsPlayed = 0;  // stats page; saved in prefs
 static int sleepSound = 0;      // Sleep place: 0 quiet, 1 rain, 2 ocean
+static bool nightSync = false;  // this WiFi boot is the nightly podcast sync (see "nightly podcast sync")
+static void nightSyncDone();
 
 static void stopPlayback();
 static void playTrack(int i);
@@ -271,8 +273,9 @@ static void playAlbumTrack(int album, int track);
 static void rescanLibrary();
 static void setVolLevel(int lvl);
 static void togglePause();
-static void switchMode();
+static void switchMode(bool quiet = false);
 static bool flickedX(const m5::touch_detail_t& t, int& dir);
+static bool flickedY(const m5::touch_detail_t& t, int& dir);
 static String asciiFold(const String& in);
 static bool musicIsPlaying();
 static void stopPlayback();
@@ -434,8 +437,9 @@ summary b{flex:1}.cur>summary{background:var(--row)}
 <div id="lib" class="dim">Loading...</div>
 
 <h2>Podcasts</h2>
-<div class="dim">Paste a show's RSS feed or its Apple Podcasts link. New episodes download in WiFi mode
-(soon after connecting, then every 6 hours) and play like albums in Bluetooth mode.</div>
+<div class="dim">Paste a show's RSS feed or its Apple Podcasts link. New episodes download every night after
+midnight while the Tiny Tunes is plugged in (it switches to WiFi and back on its own), and also soon after
+WiFi mode connects. They play like albums in Bluetooth mode.</div>
 <div class="ctl"><input type="text" id="feedurl" placeholder="https://... feed or Apple Podcasts link" style="flex:3">
 <select id="feedkeep" title="Episodes to keep"><option value="3">Keep 3</option><option value="5" selected>Keep 5</option><option value="10">Keep 10</option></select>
 <button onclick="addFeed()" style="flex:1">Add</button></div>
@@ -855,6 +859,7 @@ static void finishSync() {
   syncStatus = syncError.length() ? "Synced with problems" : "Up to date";
   if (syncChanged) rescanPending = true;  // rescanning stops playback, so not mid-song
   syncChanged = false;
+  if (nightSync) nightSyncDone();
 }
 
 static void nextFeed() {
@@ -951,7 +956,7 @@ static void podcastLoop() {
   if (!wifiUpAt) wifiUpAt = now;
   if (syncState == SyncState::Idle) {
     if (rescanPending && !musicIsPlaying()) { rescanPending = false; rescanKeepingPlace(); }
-    bool due = syncRequested || (!syncEverRan && now - wifiUpAt > 30000) || (syncEverRan && now - syncLastRun > 6UL * 3600 * 1000);
+    bool due = syncRequested || (!syncEverRan && now - wifiUpAt > (nightSync ? 2000 : 30000));
     if (!due || feeds.empty()) { syncRequested = false; return; }
     syncRequested = false;
     syncError = "";
@@ -1344,10 +1349,21 @@ static String cleanTitle(String t, bool fromFilename, bool dropArtist) {
   return t.length() ? t : String("Song");
 }
 
+static bool isPodcastAlbum(int a) { return a >= 0 && a < (int)albums.size() && albums[a].path.startsWith("/podcasts/"); }
+
+// "Wow in the World: The Moon" in the "Wow in the World" show -> "The Moon"
+static String dropShowName(String t, const String& show) {
+  if (show.length() < 3 || t.length() <= show.length() + 2 || !startsNoCase(t.c_str(), show.c_str(), show.length())) return t;
+  int i = show.length();
+  while (i < (int)t.length() && strchr(" :-|", t[i])) i++;
+  return i < (int)t.length() ? t.substring(i) : t;
+}
+
 static String trackTitle(const String& path, int a) {
   String n = path.substring(path.lastIndexOf('/') + 1);
   if (n.length() > 4) n.remove(n.length() - 4);
-  return cleanTitle(n, true, a >= 0 && a < (int)albums.size() && albums[a].artistPrefixed == 1);
+  String t = cleanTitle(n, true, a >= 0 && a < (int)albums.size() && albums[a].artistPrefixed == 1);
+  return isPodcastAlbum(a) ? dropShowName(t, albums[a].name) : t;
 }
 
 static String albumName() { return playAlbum >= 0 ? albums[playAlbum].name : String(); }
@@ -1409,6 +1425,7 @@ static void playTrack(int i) {
   file = new AudioFileSourceSD(tracks[i].c_str());
   String tagTitle = readId3Title(file);
   title = tagTitle.length() ? cleanTitle(tagTitle, false, false) : trackTitle(tracks[i], playAlbum);
+  if (isPodcastAlbum(playAlbum)) title = dropShowName(title, albums[playAlbum].name);
   mp3->begin(file, &out);
   dirtyNow = dirtyHeader = true;
   songsPlayed++;
@@ -1457,7 +1474,7 @@ static void setVolLevel(int lvl) {
 
 // ---------- mode switching ----------
 // Reboots into the firmware in the other app slot, carrying volume and track over.
-static void switchMode() {
+static void switchMode(bool quiet) {
   const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
   if (!next || esp_ota_set_boot_partition(next) != ESP_OK) {
     Serial.println("ERR other mode not installed");
@@ -1469,11 +1486,13 @@ static void switchMode() {
   Serial.println("OK");
   Serial.flush();
   stopPlayback();
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setFont(&fonts::FreeSansBold12pt7b);
-  M5.Display.setTextColor(TFT_WHITE);
-  M5.Display.setTextDatum(middle_center);
-  M5.Display.drawString(CORE2_WIFI ? "Switching to Bluetooth..." : "Switching to WiFi...", 160, 120);
+  if (!quiet) {
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setFont(&fonts::FreeSansBold12pt7b);
+    M5.Display.setTextColor(TFT_WHITE);
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.drawString(CORE2_WIFI ? "Switching to Bluetooth..." : "Switching to WiFi...", 160, 120);
+  }
   delay(300);
   esp_restart();
 }
@@ -2001,12 +2020,15 @@ static void drawAlbums() {
 // ----- tracks -----
 // Album header (tap it, or swipe right, to go back), then five big song rows.
 // Swipe up/down to scroll; the thin bar on the right shows where you are.
-static constexpr int TR_HEAD_H = 34, TR_Y = TOP_H + TR_HEAD_H + 6, TR_ROW_H = 35, TR_ROWS = 5;
+static constexpr int TR_HEAD_H = 34, TR_Y = TOP_H + TR_HEAD_H + 6;
+// Songs: five one-line rows. Podcast episodes: three taller rows (long titles wrap).
+static int trRowH() { return isPodcastAlbum(viewAlbum) ? 58 : 35; }
+static int trRows() { return isPodcastAlbum(viewAlbum) ? 3 : 5; }
 
 static void openTracks(int a) {
   viewAlbum = a;
   viewTracks = (a == playAlbum) ? tracks : listTracks(a);
-  tracksTop = (a == playAlbum && current >= 0) ? std::max(0, std::min(current - 1, (int)viewTracks.size() - TR_ROWS)) : 0;
+  tracksTop = (a == playAlbum && current >= 0) ? std::max(0, std::min(current - 1, (int)viewTracks.size() - trRows())) : 0;
   screen = Screen::Tracks;
   dirtyAll = true;
 }
@@ -2026,14 +2048,41 @@ static void drawTracks() {
   d.setTextDatum(middle_left);
   d.setTextColor(C_WHITE);
   d.drawString(fitLine(albums[viewAlbum].name, 314 - tx - 10), tx, cy);
-  for (int r = 0; r < TR_ROWS; r++) {
+  int rowH = trRowH(), rows = trRows();
+  bool podcast = isPodcastAlbum(viewAlbum);
+  for (int r = 0; r < rows; r++) {
     int i = tracksTop + r;
     if (i >= (int)viewTracks.size()) break;
-    int y = TR_Y + r * TR_ROW_H, h = TR_ROW_H - 4, my = y + h / 2;
+    int y = TR_Y + r * rowH, h = rowH - 4, my = y + h / 2;
     bool playing = viewAlbum == playAlbum && i == current;
-    d.fillRoundRect(6, y, 300, h, 10, playing ? albumColor(viewAlbum) : C_ROW);
+    uint16_t ac = albumColor(viewAlbum);
+    d.fillRoundRect(6, y, 300, h, 10, playing ? ac : C_ROW);
+    if (podcast) {  // date badge + title wrapped over up to three lines
+      String f = viewTracks[i].substring(viewTracks[i].lastIndexOf('/') + 1);
+      static const char* MON[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+      int mon = f.length() > 10 && f[4] == '-' ? f.substring(5, 7).toInt() : 0;
+      d.fillRoundRect(11, y + 5, 44, h - 10, 8, playing ? C_WHITE : ac);
+      d.setTextDatum(middle_center);
+      d.setTextColor(playing ? ac : C_WHITE);
+      if (mon >= 1 && mon <= 12) {
+        d.setFont(&fonts::FreeSansBold9pt7b);
+        d.drawString(MON[mon - 1], 33, y + 18);
+        d.setFont(&fonts::FreeSansBold12pt7b);
+        d.drawString(String(f.substring(8, 10).toInt()), 33, y + 36);
+      } else {
+        d.setFont(&fonts::FreeSansBold12pt7b);
+        d.drawString(String(i + 1), 33, my);
+      }
+      d.setFont(&fonts::FreeSansBold9pt7b);
+      auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), 236, 3);
+      int lh = 17, ty = my - (int)(lines.size() - 1) * lh / 2;
+      d.setTextDatum(middle_left);
+      d.setTextColor(C_WHITE);
+      for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], 64, ty + k * lh);
+      continue;
+    }
     d.fillCircle(24, my, 12, playing ? C_WHITE : C_OFF);
-    if (playing) iconPlaying(24, my, albumColor(viewAlbum));
+    if (playing) iconPlaying(24, my, ac);
     else {
       d.setFont(&fonts::FreeSansBold9pt7b);
       d.setTextDatum(middle_center);
@@ -2046,9 +2095,9 @@ static void drawTracks() {
     d.drawString(fitLine(trackTitle(viewTracks[i], viewAlbum), 252), 44, my);
   }
   int n = viewTracks.size();
-  if (n > TR_ROWS) {  // scroll bar
-    int trackH = TR_ROWS * TR_ROW_H - 4, barH = std::max(16, trackH * TR_ROWS / n);
-    int barY = TR_Y + (trackH - barH) * tracksTop / std::max(1, n - TR_ROWS);
+  if (n > rows) {  // scroll bar
+    int trackH = rows * rowH - 4, barH = std::max(16, trackH * rows / n);
+    int barY = TR_Y + (trackH - barH) * tracksTop / std::max(1, n - rows);
     d.fillRoundRect(311, TR_Y, 5, trackH, 2, C_ROW);
     d.fillRoundRect(311, std::min(barY, TR_Y + trackH - barH), 5, barH, 2, C_DIM);
   }
@@ -2061,7 +2110,7 @@ static void drawTracks() {
 // a level. Pitched for a 5-year-old at level 1 up to a 2nd grader at the top.
 // Sounds only play when the music is stopped or paused (and never over Bluetooth).
 
-static Quiz spellQuiz{"spell", 9}, mathQuiz{"math", 11}, clockQuiz{"clock", 5}, wordsQuiz{"words", 8, true};
+static Quiz spellQuiz{"spell", 9}, mathQuiz{"math", 11}, clockQuiz{"clock", 5}, wordsQuiz{"words", 8, true}, patternQuiz{"pattern", 6};
 static uint32_t quizFxUntil = 0, quizLastFx = 0;
 static String quizBanner;
 static constexpr int MB_Y = 202, MB_W = 92, MB_H = 60;
@@ -2099,6 +2148,31 @@ static void drawStar(int x, int y, int r, uint16_t c) {
   }
 }
 
+// Kid-friendly shapes for Memory Match and What Comes Next.
+// Shapes: 0 circle, 1 square, 2 triangle, 3 star, 4 diamond, 5 heart, 6 plus, 7 ring.
+static const uint8_t SHAPE_COL[6][3] = {{235, 60, 70}, {40, 140, 240}, {40, 200, 90}, {250, 205, 40}, {150, 80, 220}, {255, 146, 76}};
+static constexpr int SHAPES = 8, SHAPE_COLORS = 6;
+
+static void drawShape(int kind, int color, int cx, int cy, int r, uint16_t bg) {
+  auto& d = M5.Display;
+  const uint8_t* k = SHAPE_COL[color % SHAPE_COLORS];
+  uint16_t c = rgb(k[0], k[1], k[2]);
+  switch (kind % SHAPES) {
+    case 0: d.fillCircle(cx, cy, r, c); break;
+    case 1: d.fillRoundRect(cx - r * 85 / 100, cy - r * 85 / 100, r * 17 / 10, r * 17 / 10, r / 5, c); break;
+    case 2: d.fillTriangle(cx, cy - r, cx - r, cy + r * 8 / 10, cx + r, cy + r * 8 / 10, c); break;
+    case 3: drawStar(cx, cy + r / 10, r + 1, c); break;
+    case 4: d.fillTriangle(cx, cy - r, cx - r * 3 / 4, cy, cx + r * 3 / 4, cy, c);
+            d.fillTriangle(cx, cy + r, cx - r * 3 / 4, cy, cx + r * 3 / 4, cy, c); break;
+    case 5: d.fillCircle(cx - r / 2, cy - r / 4, r / 2 + 1, c);
+            d.fillCircle(cx + r / 2, cy - r / 4, r / 2 + 1, c);
+            d.fillTriangle(cx - r, cy - r / 8, cx + r, cy - r / 8, cx, cy + r, c); break;
+    case 6: d.fillRoundRect(cx - r / 3, cy - r, r * 2 / 3, 2 * r, r / 6, c);
+            d.fillRoundRect(cx - r, cy - r / 3, 2 * r, r * 2 / 3, r / 6, c); break;
+    case 7: d.fillCircle(cx, cy, r, c); d.fillCircle(cx, cy, r * 45 / 100, bg); break;
+  }
+}
+
 static void drawQuizHeader(const Quiz& q) {
   auto& d = M5.Display;
   d.fillRect(0, TOP_H, 320, 28, C_BG);
@@ -2127,6 +2201,11 @@ static void drawQuizBubble(const Quiz& q, int i) {
   d.fillRect(x - 4, y - 4, w + 8, h + 10, C_BG);
   d.fillRoundRect(x, y + 3, w, h, r, C_SHADE);
   d.fillRoundRect(x, y, w, h, r, c);
+  if (q.choices[i].startsWith("#")) {  // a shape answer (What Comes Next)
+    drawShape(q.choices[i][1] - '0', q.choices[i][2] - '0', x + w / 2, y + h / 2, 20, c);
+    if (q.wrong[i]) d.fillRoundRect(x + 6, y + h / 2 - 2, w - 12, 4, 2, C_DIM);  // crossed out
+    return;
+  }
   d.setTextDatum(middle_center);
   d.setTextColor(q.wrong[i] ? C_DIM : C_WHITE);
   for (auto* f : {&fonts::FreeSansBold24pt7b, &fonts::FreeSansBold18pt7b, &fonts::FreeSansBold12pt7b}) {
@@ -2444,21 +2523,115 @@ static void drawWordsQuestion() {
   d.drawString(wordsQuiz.solved ? "Yes! That's right!" : "Which spelling is correct?", 160, TOP_H + 42);
 }
 
+// ----- what comes next: finish the pattern -----
+// Pictures first (no reading): AB, AAB, ABC, AABB; then skip-counting numbers for
+// the 7-year-old. Shape answers are encoded as "#<shape><color>" and drawn on the bubble.
+static String patItems[8];  // the visible sequence (shape codes or numbers); the answer is next
+static int patCount = 0;
+static bool patNumbers = false;
+
+static String shapeCode(int kind, int color) { return "#" + String(kind) + String(color); }
+
+static void newPatternQuestion() {
+  int L = patternQuiz.level;
+  String answer, d1, d2;
+  if (L >= 5 && (L == 6 || rnd(0, 1))) {  // numbers: 2 4 6 8 ?
+    static const int easy[] = {1, 2, 5, 10}, more[] = {2, 3, 5, 10};
+    int step = L == 5 ? easy[rnd(0, 3)] : more[rnd(0, 3)];
+    bool down = L == 6 && rnd(0, 2) == 0;
+    patNumbers = true;
+    patCount = 5;
+    int start = down ? step * (patCount + rnd(1, 5)) : step * rnd(0, 4);  // counting down never goes below 0
+    for (int i = 0; i < patCount; i++) patItems[i] = String(start + (down ? -1 : 1) * i * step);
+    int next = start + (down ? -1 : 1) * patCount * step;
+    answer = String(next);
+    d1 = String(next + (rnd(0, 1) || next == 0 ? 1 : -1));  // off by one
+    d2 = patItems[patCount - 1];                            // repeating the last number
+    if (d2 == d1) d2 = String(next + (down ? -step : step));
+  } else {
+    patNumbers = false;
+    // pattern unit by level: AB, AAB, ABC, AABB/ABB
+    static const char* units[] = {"AB", "AAB", "ABC", "AABB"};
+    String unit = L >= 4 ? (rnd(0, 1) ? "AABB" : "ABB") : units[L - 1];
+    int nUnique = unit.indexOf('C') >= 0 ? 3 : 2;
+    // what changes: color only (same shape), shape only, or both
+    int mode = L == 1 ? rnd(0, 1) : rnd(0, 2);
+    int baseShape = rnd(0, SHAPES - 1), baseColor = rnd(0, SHAPE_COLORS - 1);
+    String elem[4];
+    static const int SHAPE_STEP[4] = {0, 3, 6, 1}, COLOR_STEP[4] = {1, 3, 5, 2};  // four distinct pieces
+    for (int u = 0; u < 4; u++) {
+      int shape = mode == 0 ? baseShape : (baseShape + SHAPE_STEP[u]) % SHAPES;
+      int color = mode == 1 ? baseColor : (baseColor + COLOR_STEP[u]) % SHAPE_COLORS;
+      elem[u] = shapeCode(shape, color);
+    }
+    patCount = std::min(7, (int)unit.length() * 2 + (unit.length() == 2 ? 1 : 0));
+    for (int i = 0; i < patCount; i++) patItems[i] = elem[unit[i % unit.length()] - 'A'];
+    answer = elem[unit[patCount % unit.length()] - 'A'];
+    // wrong choices: the other pattern pieces, plus a new one if needed
+    String others[4];
+    int n = 0;
+    for (int u = 0; u < nUnique; u++) if (elem[u] != answer) others[n++] = elem[u];
+    others[n++] = elem[3];
+    d1 = others[0];
+    d2 = others[1] != d1 ? others[1] : others[2];
+  }
+  setChoices(patternQuiz, answer, d1, d2);
+}
+
+// Draws one sequence item / answer: a shape code, or a number in a rounded box.
+static void drawPatternItem(const String& item, int cx, int cy, int r, uint16_t bg) {
+  if (item.startsWith("#")) { drawShape(item[1] - '0', item[2] - '0', cx, cy, r, bg); return; }
+  auto& d = M5.Display;
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  d.setTextDatum(middle_center);
+  d.setTextColor(C_WHITE);
+  d.drawString(item, cx, cy + 1);
+}
+
+static void drawPatternQuestion() {
+  auto& d = M5.Display;
+  d.fillRect(0, TOP_H + 28, 320, MB_Y - MB_H / 2 - 6 - (TOP_H + 28), C_BG);
+  int n = patCount + 1, cell = patNumbers ? 44 : 38, x0 = 160 - n * cell / 2 + cell / 2, y = 110;
+  for (int i = 0; i < patCount; i++) {
+    if (patNumbers) d.fillRoundRect(x0 + i * cell - cell / 2 + 2, y - 18, cell - 4, 36, 8, C_ROW);
+    drawPatternItem(patItems[i], x0 + i * cell, y, 14, patNumbers ? C_ROW : C_BG);
+  }
+  int qx = x0 + patCount * cell;
+  if (patternQuiz.solved) {
+    if (patNumbers) d.fillRoundRect(qx - cell / 2 + 2, y - 18, cell - 4, 36, 8, C_GREEN);
+    drawPatternItem(patternQuiz.choices[patternQuiz.answer], qx, y, 14, patNumbers ? C_GREEN : C_BG);
+  } else {
+    for (int k = 0; k < 2; k++) d.drawRoundRect(qx - cell / 2 + 2 + k, y - 18 + k, cell - 4 - 2 * k, 36 - 2 * k, 8, C_YELLOW);
+    d.setFont(&fonts::FreeSansBold12pt7b);
+    d.setTextDatum(middle_center);
+    d.setTextColor(C_YELLOW);
+    d.drawString("?", qx, y + 1);
+  }
+  d.setFont(&fonts::FreeSansBold9pt7b);
+  d.setTextColor(C_DIM);
+  d.drawString("What comes next?", 160, 148);
+}
+
 // ----- shared flow -----
-static bool isQuiz(Screen s) { return s == Screen::Spell || s == Screen::Math || s == Screen::Clock || s == Screen::Words; }
+static bool isQuiz(Screen s) {
+  return s == Screen::Spell || s == Screen::Math || s == Screen::Clock || s == Screen::Words || s == Screen::Pattern;
+}
 static Quiz& quizFor(Screen s) {
-  return s == Screen::Spell ? spellQuiz : s == Screen::Clock ? clockQuiz : s == Screen::Words ? wordsQuiz : mathQuiz;
+  return s == Screen::Spell ? spellQuiz : s == Screen::Clock ? clockQuiz : s == Screen::Words ? wordsQuiz
+       : s == Screen::Pattern ? patternQuiz : mathQuiz;
 }
 static void newQuestion(Screen s) {
   if (s == Screen::Spell) newSpellQuestion();
   else if (s == Screen::Clock) newClockQuestion();
   else if (s == Screen::Words) newWordsQuestion();
+  else if (s == Screen::Pattern) newPatternQuestion();
   else newMathQuestion();
 }
 static void drawQuestion(Screen s) {
   if (s == Screen::Spell) drawSpellQuestion();
   else if (s == Screen::Clock) drawClockQuestion();
   else if (s == Screen::Words) drawWordsQuestion();
+  else if (s == Screen::Pattern) drawPatternQuestion();
   else drawMathQuestion();
 }
 
@@ -2545,7 +2718,7 @@ static void serviceQuiz(Screen s) {
 }
 
 static void loadQuizProgress() {
-  for (Quiz* q : {&spellQuiz, &mathQuiz, &clockQuiz, &wordsQuiz}) {
+  for (Quiz* q : {&spellQuiz, &mathQuiz, &clockQuiz, &wordsQuiz, &patternQuiz}) {
     String k = q->key;
     int lvl = prefs.isKey((k + "lvl").c_str()) ? prefs.getUChar((k + "lvl").c_str(), 1)
                                                : prefs.getUChar((k + "skill").c_str(), 0) / 3 + 1;  // from the skill-score builds
@@ -2554,59 +2727,695 @@ static void loadQuizProgress() {
   }
 }
 
+// ================= Simon: watch the pads light up, then copy the sequence =================
+// No reading needed. Each round adds one step and plays a little faster. Waiting
+// too long just replays the sequence; a wrong tap ends the game with the score.
+// Best score is saved. Tones follow the games rule (silent while music plays).
+static constexpr int SIMON_MAX = 64;
+static constexpr int SP_Y = 52, SP_W = 151, SP_H = 90, SP_GAP = 6;
+static const uint8_t SIMON_COL[4][3] = {{40, 200, 90}, {235, 60, 70}, {250, 205, 40}, {40, 140, 240}};
+static const uint16_t SIMON_HZ[4] = {330, 277, 440, 165};  // the classic Simon notes
+enum class SimonState { Start, Showing, Input, Over };
+
+static SimonState simonState = SimonState::Start;
+static uint8_t simonSeq[SIMON_MAX];
+static int simonLen = 0, simonPos = 0, simonBest = 0, simonLit = -1;
+static uint32_t simonNextAt = 0, simonInputAt = 0;
+static String simonMsg;
+
+static void simonPadRect(int i, int& x, int& y) {
+  x = 6 + (i % 2) * (SP_W + SP_GAP);
+  y = SP_Y + (i / 2) * (SP_H + SP_GAP);
+}
+
+static void drawSimonPad(int i, bool lit) {
+  auto& d = M5.Display;
+  int x, y;
+  simonPadRect(i, x, y);
+  const uint8_t* c = SIMON_COL[i];
+  d.fillRoundRect(x, y, SP_W, SP_H, 18, lit ? rgb(std::min(255, c[0] + 60), std::min(255, c[1] + 60), std::min(255, c[2] + 60))
+                                            : rgb(c[0] * 2 / 5, c[1] * 2 / 5, c[2] * 2 / 5));
+  if (lit)
+    for (int t = 0; t < 3; t++) d.drawRoundRect(x + t, y + t, SP_W - 2 * t, SP_H - 2 * t, 18 - t, C_WHITE);
+}
+
+static void drawSimonHeader() {
+  auto& d = M5.Display;
+  d.fillRect(0, TOP_H, 320, SP_Y - 2 - TOP_H, C_BG);
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  d.setTextDatum(middle_left);
+  d.setTextColor(C_WHITE);
+  d.drawString(simonMsg, 10, TOP_H + 15);
+  drawStar(232, TOP_H + 15, 9, C_YELLOW);
+  d.setFont(&fonts::FreeSansBold9pt7b);
+  d.drawString("Best " + String(simonBest), 246, TOP_H + 16);
+}
+
+static void drawSimon() {
+  M5.Display.fillRect(0, TOP_H, 320, 240 - TOP_H, C_BG);
+  drawSimonHeader();
+  for (int i = 0; i < 4; i++) drawSimonPad(i, i == simonLit);
+  if (simonState == SimonState::Start || simonState == SimonState::Over) {  // big play button in the middle
+    M5.Display.fillCircle(160, SP_Y + SP_H + SP_GAP / 2, 30, C_SHADE);
+    M5.Display.fillCircle(160, SP_Y + SP_H + SP_GAP / 2 - 2, 30, C_WHITE);
+    iconPlay(160, SP_Y + SP_H + SP_GAP / 2 - 2, 26, C_GREEN);
+  }
+}
+
+static void simonTone(int pad, int ms) {
+  if (btConnected || musicIsPlaying()) return;
+  M5.Speaker.tone(SIMON_HZ[pad], ms, 1, true);
+}
+
+static int simonOnMs() { return simonLen < 6 ? 480 : simonLen < 10 ? 380 : 300; }
+static int simonOffMs() { return simonLen < 6 ? 180 : 130; }
+
+static void simonShow() {  // play the sequence from the start
+  simonState = SimonState::Showing;
+  simonPos = 0;
+  simonLit = -1;
+  simonNextAt = millis() + 700;
+  simonMsg = "Watch...";
+  drawSimon();
+}
+
+static void simonNewGame() {
+  simonLen = 1;
+  for (auto& s : simonSeq) s = rnd(0, 3);
+  simonShow();
+}
+
+static void enterSimon() {
+  if (simonState == SimonState::Showing || simonState == SimonState::Input) simonShow();  // pick up where they were
+  else { simonState = SimonState::Start; simonLit = -1; simonMsg = "Simon says!"; }
+}
+
+static void handleSimon(const m5::touch_detail_t& t) {
+  int dir;
+  if (flickedX(t, dir) && dir < 0) { buzz(); showScreen(Screen::PlayHome); return; }  // swipe right = back to the games
+  if (!t.wasPressed()) return;  // react on touch-down, like real buttons
+  if (simonState == SimonState::Start || simonState == SimonState::Over) { buzz(); simonNewGame(); return; }
+  if (simonState != SimonState::Input) return;
+  int pad = -1;
+  for (int i = 0; i < 4; i++) {
+    int x, y;
+    simonPadRect(i, x, y);
+    if (t.x >= x - 3 && t.x < x + SP_W + 3 && t.y >= y - 3 && t.y < y + SP_H + 3) pad = i;
+  }
+  if (pad < 0) return;
+  simonInputAt = millis();
+  if (pad != simonSeq[simonPos]) {  // wrong: show the score, offer another go
+    buzz(2);
+    chime(false);
+    int score = simonLen - 1;
+    if (score > simonBest) { simonBest = score; prefs.putUShort("simonbest", simonBest); }
+    simonMsg = score ? "You got " + String(score) + "!" : String("Try again!");
+    simonState = SimonState::Over;
+    simonLit = simonSeq[simonPos];  // light the one it should have been
+    drawSimon();
+    return;
+  }
+  buzz();
+  simonTone(pad, 250);
+  if (simonLit >= 0 && simonLit != pad) drawSimonPad(simonLit, false);
+  simonLit = pad;
+  drawSimonPad(pad, true);
+  simonNextAt = millis() + 250;  // unlight shortly
+  if (++simonPos == simonLen) {  // round done: one more step next time
+    simonMsg = simonLen >= 5 && simonLen % 5 == 0 ? "Wow! " + String(simonLen) + "!" : String("Great!");
+    drawSimonHeader();
+    if (simonLen < SIMON_MAX) simonLen++;
+    simonState = SimonState::Showing;
+    simonPos = 0;
+    simonNextAt = millis() + 1100;
+  }
+}
+
+static void serviceSimon() {
+  uint32_t now = millis();
+  if (simonState == SimonState::Showing && (int32_t)(now - simonNextAt) >= 0) {
+    if (simonLit >= 0) {  // gap after a lit pad
+      drawSimonPad(simonLit, false);
+      simonLit = -1;
+      simonNextAt = now + simonOffMs();
+      if (simonPos >= simonLen) {  // shown it all: their turn
+        simonState = SimonState::Input;
+        simonPos = 0;
+        simonInputAt = now;
+        simonMsg = "Your turn!";
+        drawSimonHeader();
+      }
+    } else {
+      if (simonPos == 0) { simonMsg = "Watch..."; drawSimonHeader(); }
+      simonLit = simonSeq[simonPos++];
+      drawSimonPad(simonLit, true);
+      simonTone(simonLit, simonOnMs());
+      simonNextAt = now + simonOnMs();
+    }
+  } else if (simonState == SimonState::Input) {
+    if (simonLit >= 0 && (int32_t)(now - simonNextAt) >= 0) { drawSimonPad(simonLit, false); simonLit = -1; }
+    if (now - simonInputAt > 7000) simonShow();  // stuck? show it again, no penalty
+  }
+}
+
+// ================= Memory Match =================
+// Flip two cards; matching shapes stay up. Level 1 is 3 pairs, up to 8 pairs (4x4).
+// Every board ends in a celebration; a tidy one (few extra flips) moves up a level.
+static const uint8_t MEM_COLS[4] = {3, 4, 4, 4}, MEM_ROWS[4] = {2, 2, 3, 4};
+static int memLevel = 1, memCards = 0, memMoves = 0, memFirst = -1, memSecond = -1;
+static uint8_t memFace[16];       // pair id per card
+static bool memUp[16], memDone[16];
+static uint32_t memHideAt = 0, memWinAt = 0;
+static bool memWon = false;
+
+static void memCardRect(int i, int& x, int& y, int& w, int& h) {
+  int cols = MEM_COLS[memLevel - 1], rows = MEM_ROWS[memLevel - 1];
+  w = (312 - (cols - 1) * 6) / cols;
+  h = (210 - (rows - 1) * 6) / rows;
+  x = 4 + (i % cols) * (w + 6);
+  y = TOP_H + 5 + (i / cols) * (h + 6);
+}
+
+static void drawMemCard(int i) {
+  auto& d = M5.Display;
+  int x, y, w, h;
+  memCardRect(i, x, y, w, h);
+  d.fillRect(x, y, w, h + 3, C_BG);
+  d.fillRoundRect(x, y + 3, w, h, 10, C_SHADE);
+  if (memUp[i] || memDone[i]) {
+    uint16_t face = rgb(245, 242, 232);
+    d.fillRoundRect(x, y, w, h, 10, face);
+    if (memDone[i]) for (int t = 0; t < 2; t++) d.drawRoundRect(x + t, y + t, w - 2 * t, h - 2 * t, 10, C_GREEN);
+    int f = memFace[i];
+    drawShape(f % SHAPES, (f * 5) % SHAPE_COLORS, x + w / 2, y + h / 2, std::min(w, h) * 32 / 100, face);
+  } else {
+    d.fillRoundRect(x, y, w, h, 10, rgb(110, 70, 200));
+    drawStar(x + w / 2, y + h / 2, std::min(w, h) / 5, rgb(170, 140, 240));
+  }
+}
+
+static void drawMemory() {
+  M5.Display.fillRect(0, TOP_H, 320, 240 - TOP_H, C_BG);
+  for (int i = 0; i < memCards; i++) drawMemCard(i);
+  if (memWon) {
+    auto& d = M5.Display;
+    d.fillRoundRect(40, 86, 240, 70, 16, rgb(20, 20, 40));
+    d.setFont(&fonts::FreeSansBold18pt7b);
+    d.setTextDatum(middle_center);
+    d.setTextColor(C_YELLOW);
+    d.drawString("You did it!", 160, 110);
+    d.setFont(&fonts::FreeSansBold9pt7b);
+    d.setTextColor(C_WHITE);
+    d.drawString(String(memMoves) + " flips. Tap for more!", 160, 140);
+  }
+}
+
+static void memNewBoard() {
+  int pairs = MEM_COLS[memLevel - 1] * MEM_ROWS[memLevel - 1] / 2;
+  memCards = pairs * 2;
+  int start = rnd(0, SHAPES - 1);  // which shapes, varied board to board
+  for (int i = 0; i < memCards; i++) memFace[i] = (start + i / 2) % SHAPES + (i / 2 >= SHAPES ? SHAPES : 0);
+  for (int i = memCards - 1; i > 0; i--) std::swap(memFace[i], memFace[rnd(0, i)]);
+  for (int i = 0; i < memCards; i++) memUp[i] = memDone[i] = false;
+  memMoves = 0;
+  memFirst = memSecond = -1;
+  memHideAt = memWinAt = 0;
+  memWon = false;
+}
+
+static void enterMemory() { if (!memCards || memWon) memNewBoard(); }
+
+static void handleMemory(const m5::touch_detail_t& t) {
+  int dir;
+  if (flickedX(t, dir) && dir < 0) { buzz(); showScreen(Screen::PlayHome); return; }
+  if (!t.wasClicked()) return;
+  if (memWon) { if (millis() - memWinAt > 800) { buzz(); memNewBoard(); drawMemory(); } return; }
+  if (memHideAt) {  // tapping while a wrong pair shows: flip them back now
+    memUp[memFirst] = memUp[memSecond] = false;
+    drawMemCard(memFirst); drawMemCard(memSecond);
+    memFirst = memSecond = -1;
+    memHideAt = 0;
+  }
+  for (int i = 0; i < memCards; i++) {
+    int x, y, w, h;
+    memCardRect(i, x, y, w, h);
+    if (t.x < x || t.x >= x + w || t.y < y || t.y >= y + h || memUp[i] || memDone[i]) continue;
+    buzz();
+    memUp[i] = true;
+    drawMemCard(i);
+    if (memFirst < 0) { memFirst = i; return; }
+    memSecond = i;
+    memMoves++;
+    if (memFace[memFirst] == memFace[memSecond]) {
+      memDone[memFirst] = memDone[memSecond] = true;
+      drawMemCard(memFirst); drawMemCard(memSecond);
+      memFirst = memSecond = -1;
+      chime(true);
+      bool all = true;
+      for (int k = 0; k < memCards; k++) all &= memDone[k];
+      if (all) {
+        int pairs = memCards / 2;
+        if (memMoves <= pairs * 2 && memLevel < 4) { memLevel++; prefs.putUChar("memlvl", memLevel); }
+        memWon = true;
+        memWinAt = millis();
+        quizFxUntil = millis() + 1500;  // confetti
+        drawMemory();
+      }
+    } else {
+      memHideAt = millis() + 1000;
+    }
+    return;
+  }
+}
+
+static void serviceMemory() {
+  if (memHideAt && (int32_t)(millis() - memHideAt) >= 0) {
+    memUp[memFirst] = memUp[memSecond] = false;
+    drawMemCard(memFirst); drawMemCard(memSecond);
+    memFirst = memSecond = -1;
+    memHideAt = 0;
+  }
+  if (quizFxUntil && millis() - quizLastFx > 40) {  // confetti around the "You did it!" box
+    quizLastFx = millis();
+    static const uint16_t conf[] = {0xF8A0, 0x07E0, 0x041F, 0xFFE0, 0xF81F, 0x07FF};
+    for (int k = 0; k < 6; k++) {
+      int y = rnd(TOP_H + 4, 236);
+      if (y > 80 && y < 160) continue;
+      M5.Display.fillRect(rnd(4, 312), y, rnd(3, 7), rnd(3, 7), conf[rnd(0, 5)]);
+    }
+    if ((int32_t)(millis() - quizFxUntil) >= 0) quizFxUntil = 0;
+  }
+}
+
+// ================= Tilt Maze =================
+// Tilt the Core2 to roll the ball to the star. The tilt is measured relative to how
+// it's held when the maze starts. Mazes are random, bigger each level.
+// The motion sensor's axes vs the (upside-down) screen: set TILT_* if the ball moves wrong.
+static constexpr int TILT_X_AXIS = 0, TILT_Y_AXIS = 1;  // 0 = ax, 1 = ay
+static constexpr float TILT_X_SIGN = 1.0f, TILT_Y_SIGN = -1.0f;
+static const uint8_t MAZE_COLS[5] = {4, 5, 7, 9, 11}, MAZE_ROWS[5] = {3, 4, 5, 6, 7};
+static constexpr int MAZE_MAX_C = 11, MAZE_MAX_R = 7;
+static uint8_t mazeWall[MAZE_MAX_R][MAZE_MAX_C];  // bits: 1 N, 2 E, 4 S, 8 W
+static int mazeLevel = 1, mazeCols = 4, mazeRows = 3, mazeCell = 50, mazeX0 = 0, mazeY0 = 0, mazeR = 10;
+static float ballX, ballY, ballVX, ballVY, tiltBaseX = 0, tiltBaseY = 0;
+static int ballDrawnX = -1000, ballDrawnY = -1000;
+static uint32_t mazeStartAt = 0, mazeWinAt = 0, mazeLastStep = 0;
+static bool mazeWon = false, mazeCalibrated = false;
+
+static void mazeGenerate() {
+  mazeCols = MAZE_COLS[mazeLevel - 1];
+  mazeRows = MAZE_ROWS[mazeLevel - 1];
+  mazeCell = std::min(312 / mazeCols, 210 / mazeRows);
+  mazeX0 = 160 - mazeCols * mazeCell / 2;
+  mazeY0 = TOP_H + 4 + (212 - mazeRows * mazeCell) / 2;
+  mazeR = std::max(5, mazeCell * 26 / 100);
+  for (int r = 0; r < mazeRows; r++) for (int c = 0; c < mazeCols; c++) mazeWall[r][c] = 15;
+  // depth-first carve from the start cell
+  static uint8_t stack[MAZE_MAX_C * MAZE_MAX_R];
+  static bool seen[MAZE_MAX_R][MAZE_MAX_C];
+  memset(seen, 0, sizeof seen);
+  int sp = 0;
+  stack[sp++] = 0;
+  seen[0][0] = true;
+  static const int DR[4] = {-1, 0, 1, 0}, DC[4] = {0, 1, 0, -1}, BIT[4] = {1, 2, 4, 8}, OPP[4] = {4, 8, 1, 2};
+  while (sp) {
+    int cur = stack[sp - 1], r = cur / mazeCols, c = cur % mazeCols;
+    int opts[4], n = 0;
+    for (int k = 0; k < 4; k++) {
+      int nr = r + DR[k], nc = c + DC[k];
+      if (nr >= 0 && nr < mazeRows && nc >= 0 && nc < mazeCols && !seen[nr][nc]) opts[n++] = k;
+    }
+    if (!n) { sp--; continue; }
+    int k = opts[rnd(0, n - 1)], nr = r + DR[k], nc = c + DC[k];
+    mazeWall[r][c] &= ~BIT[k];
+    mazeWall[nr][nc] &= ~OPP[k];
+    seen[nr][nc] = true;
+    stack[sp++] = nr * mazeCols + nc;
+  }
+  ballX = mazeX0 + mazeCell / 2.0f;
+  ballY = mazeY0 + mazeCell / 2.0f;
+  ballVX = ballVY = 0;
+  ballDrawnX = ballDrawnY = -1000;
+  mazeWon = false;
+  mazeCalibrated = false;
+  mazeStartAt = millis();
+}
+
+static void drawMazeBall(bool erase) {
+  auto& d = M5.Display;
+  if (erase && ballDrawnX > -1000) d.fillCircle(ballDrawnX, ballDrawnY, mazeR, C_BG);
+  ballDrawnX = (int)ballX;
+  ballDrawnY = (int)ballY;
+  d.fillCircle(ballDrawnX, ballDrawnY, mazeR, rgb(255, 120, 60));
+  d.fillCircle(ballDrawnX - mazeR / 3, ballDrawnY - mazeR / 3, std::max(1, mazeR / 4), rgb(255, 210, 170));
+}
+
+static void drawMaze() {
+  auto& d = M5.Display;
+  d.fillRect(0, TOP_H, 320, 240 - TOP_H, C_BG);
+  int gx = mazeX0 + (mazeCols - 1) * mazeCell + mazeCell / 2, gy = mazeY0 + (mazeRows - 1) * mazeCell + mazeCell / 2;
+  drawStar(gx, gy, mazeCell * 32 / 100, C_YELLOW);
+  uint16_t wc = rgb(120, 200, 255);
+  for (int r = 0; r < mazeRows; r++)
+    for (int c = 0; c < mazeCols; c++) {
+      int x = mazeX0 + c * mazeCell, y = mazeY0 + r * mazeCell;
+      uint8_t w = mazeWall[r][c];
+      if (w & 1) d.fillRect(x - 1, y - 1, mazeCell + 3, 3, wc);
+      if (w & 8) d.fillRect(x - 1, y - 1, 3, mazeCell + 3, wc);
+      if (r == mazeRows - 1 && (w & 4)) d.fillRect(x - 1, y + mazeCell - 1, mazeCell + 3, 3, wc);
+      if (c == mazeCols - 1 && (w & 2)) d.fillRect(x + mazeCell - 1, y - 1, 3, mazeCell + 3, wc);
+      if (r < mazeRows - 1 && (w & 4)) d.fillRect(x - 1, y + mazeCell - 1, mazeCell + 3, 3, wc);
+      if (c < mazeCols - 1 && (w & 2)) d.fillRect(x + mazeCell - 1, y - 1, 3, mazeCell + 3, wc);
+    }
+  ballDrawnX = -1000;
+  drawMazeBall(false);
+  if (mazeWon) {
+    d.fillRoundRect(50, 92, 220, 56, 16, rgb(20, 20, 40));
+    d.setFont(&fonts::FreeSansBold18pt7b);
+    d.setTextDatum(middle_center);
+    d.setTextColor(C_YELLOW);
+    d.drawString("You made it!", 160, 120);
+  }
+}
+
+static void readTilt(float& tx, float& ty) {
+  float a[3] = {0, 0, 0};
+  M5.Imu.getAccel(&a[0], &a[1], &a[2]);
+  tx = a[TILT_X_AXIS] * TILT_X_SIGN;
+  ty = a[TILT_Y_AXIS] * TILT_Y_SIGN;
+}
+
+static void enterMaze() { if (!mazeStartAt || mazeWon) mazeGenerate(); else mazeCalibrated = false; }
+
+static void handleMaze(const m5::touch_detail_t& t) {
+  int dir;
+  if (flickedX(t, dir) && dir < 0) { buzz(); showScreen(Screen::PlayHome); return; }
+  if (t.wasClicked() && mazeWon && millis() - mazeWinAt > 800) { buzz(); mazeGenerate(); drawMaze(); }
+}
+
+static void serviceMaze() {
+  uint32_t now = millis();
+  if (mazeWon) {
+    if (now - mazeWinAt > 2500) { mazeGenerate(); drawMaze(); }  // next maze on its own
+    return;
+  }
+  if (now - mazeLastStep < 16) return;
+  float dt = std::min(0.05f, (now - mazeLastStep) / 1000.0f);
+  mazeLastStep = now;
+  float tx, ty;
+  readTilt(tx, ty);
+  if (!mazeCalibrated) {  // the way they're holding it now counts as level
+    tiltBaseX = tx; tiltBaseY = ty; mazeCalibrated = true;
+    return;
+  }
+  lastTouchMs = now;  // tilting is playing: don't dim
+  float ax = (tx - tiltBaseX), ay = (ty - tiltBaseY);
+  if (fabsf(ax) < 0.04f) ax = 0;  // small dead zone so it can rest
+  if (fabsf(ay) < 0.04f) ay = 0;
+  float accel = mazeCell * 14.0f;  // px/s^2 per g
+  ballVX = (ballVX + ax * accel * dt) * 0.97f;
+  ballVY = (ballVY + ay * accel * dt) * 0.97f;
+  float maxV = mazeCell * 6.0f;
+  ballVX = constrain(ballVX, -maxV, maxV);
+  ballVY = constrain(ballVY, -maxV, maxV);
+  // move in small steps, stopping at walls of the cell the ball is in
+  int steps = 1 + (int)(std::max(fabsf(ballVX), fabsf(ballVY)) * dt / (mazeR * 0.5f));
+  for (int s = 0; s < steps; s++) {
+    float nx = ballX + ballVX * dt / steps, ny = ballY + ballVY * dt / steps;
+    int c = constrain((int)((ballX - mazeX0) / mazeCell), 0, mazeCols - 1);
+    int r = constrain((int)((ballY - mazeY0) / mazeCell), 0, mazeRows - 1);
+    uint8_t w = mazeWall[r][c];
+    float left = mazeX0 + c * mazeCell + mazeR + 2, right = mazeX0 + (c + 1) * mazeCell - mazeR - 2;
+    float top = mazeY0 + r * mazeCell + mazeR + 2, bottom = mazeY0 + (r + 1) * mazeCell - mazeR - 2;
+    if ((w & 8) && nx < left) { nx = left; ballVX = -ballVX * 0.3f; }
+    if ((w & 2) && nx > right) { nx = right; ballVX = -ballVX * 0.3f; }
+    if ((w & 1) && ny < top) { ny = top; ballVY = -ballVY * 0.3f; }
+    if ((w & 4) && ny > bottom) { ny = bottom; ballVY = -ballVY * 0.3f; }
+    // passing through an open side: stay clear of the wall stubs at its corners
+    bool outX = nx < mazeX0 + c * mazeCell + mazeR || nx > mazeX0 + (c + 1) * mazeCell - mazeR;
+    bool outY = ny < mazeY0 + r * mazeCell + mazeR || ny > mazeY0 + (r + 1) * mazeCell - mazeR;
+    if (outX && outY) { nx = ballX; ny = ballY; ballVX *= 0.5f; ballVY *= 0.5f; }
+    ballX = nx;
+    ballY = ny;
+  }
+  if (abs((int)ballX - ballDrawnX) + abs((int)ballY - ballDrawnY) >= 1) drawMazeBall(true);
+  int c = (int)((ballX - mazeX0) / mazeCell), r = (int)((ballY - mazeY0) / mazeCell);
+  if (c == mazeCols - 1 && r == mazeRows - 1) {  // reached the star
+    mazeWon = true;
+    mazeWinAt = now;
+    buzz();
+    chime(true);
+    if (mazeLevel < 5) { mazeLevel++; prefs.putUChar("mazelvl", mazeLevel); }
+    drawMaze();
+  }
+}
+
+// ================= Whack-a-Mole =================
+// 30-second rounds: tap moles as they pop up. They come faster as the score climbs.
+static constexpr int MOLES = 9, MOLE_ROUND_MS = 30000;
+static constexpr int MOLE_Y0 = 54, MOLE_CW = 106, MOLE_CH = 62;
+enum class MoleState { Start, Playing, Over };
+static MoleState moleState = MoleState::Start;
+static uint32_t moleUpUntil[MOLES], moleBonkUntil[MOLES], moleRoundEnd = 0, moleNextSpawn = 0;
+static int moleScore = 0, moleBest = 0;
+static bool moleShown[MOLES];
+
+static void moleCenter(int i, int& cx, int& cy) {
+  cx = 53 + (i % 3) * MOLE_CW;
+  cy = MOLE_Y0 + (i / 3) * MOLE_CH + 40;  // hole line
+}
+
+static void drawMoleCell(int i) {
+  auto& d = M5.Display;
+  int cx, cy;
+  moleCenter(i, cx, cy);
+  uint16_t grass = rgb(60, 140, 70);
+  d.fillRect(cx - MOLE_CW / 2, cy - 40, MOLE_CW, MOLE_CH, grass);
+  bool up = moleUpUntil[i] != 0, bonk = moleBonkUntil[i] != 0;
+  d.fillEllipse(cx, cy + 6, 36, 11, rgb(60, 35, 20));  // hole
+  if (up || bonk) {
+    uint16_t fur = rgb(150, 100, 60);
+    d.fillRect(cx - 22, cy - 18, 45, 24, fur);
+    d.fillCircle(cx, cy - 18, 22, fur);
+    d.fillEllipse(cx, cy - 8, 11, 7, rgb(235, 200, 160));  // snout
+    d.fillCircle(cx, cy - 12, 3, rgb(60, 30, 30));          // nose
+    if (bonk) {  // X eyes and a star
+      for (int s = -1; s <= 1; s += 2) {
+        d.drawLine(cx + s * 9 - 3, cy - 27, cx + s * 9 + 3, cy - 21, C_SHADE);
+        d.drawLine(cx + s * 9 - 3, cy - 21, cx + s * 9 + 3, cy - 27, C_SHADE);
+      }
+      drawStar(cx + 20, cy - 36, 7, C_YELLOW);
+    } else {
+      d.fillCircle(cx - 9, cy - 24, 3, C_SHADE);
+      d.fillCircle(cx + 9, cy - 24, 3, C_SHADE);
+    }
+    d.fillEllipse(cx, cy + 6, 36, 5, rgb(60, 35, 20));  // hole lip in front of the mole
+  }
+  moleShown[i] = up || bonk;
+}
+
+static void drawMoleHeader() {
+  auto& d = M5.Display;
+  d.fillRect(0, TOP_H, 320, MOLE_Y0 - TOP_H, C_BG);
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  d.setTextDatum(middle_left);
+  d.setTextColor(C_WHITE);
+  d.drawString(String(moleScore), 10, TOP_H + 16);
+  if (moleState == MoleState::Playing) {
+    int left = std::max<int32_t>(0, (int32_t)(moleRoundEnd - millis()));
+    d.fillRoundRect(60, TOP_H + 10, 160, 12, 6, C_ROW);
+    d.fillRoundRect(60, TOP_H + 10, std::max(12, 160 * left / MOLE_ROUND_MS), 12, 6, left < 5000 ? rgb(255, 90, 90) : C_GREEN);
+  }
+  drawStar(240, TOP_H + 16, 9, C_YELLOW);
+  d.setFont(&fonts::FreeSansBold9pt7b);
+  d.drawString("Best " + String(moleBest), 254, TOP_H + 17);
+}
+
+static void drawMoles() {
+  M5.Display.fillRect(0, TOP_H, 320, 240 - TOP_H, rgb(60, 140, 70));
+  drawMoleHeader();
+  for (int i = 0; i < MOLES; i++) drawMoleCell(i);
+  if (moleState != MoleState::Playing) {
+    auto& d = M5.Display;
+    d.fillRoundRect(60, 104, 200, 70, 16, rgb(20, 20, 40));
+    d.setFont(&fonts::FreeSansBold12pt7b);
+    d.setTextDatum(middle_center);
+    d.setTextColor(C_YELLOW);
+    d.drawString(moleState == MoleState::Start ? "Whack the moles!" : "You got " + String(moleScore) + "!", 160, 126);
+    d.setFont(&fonts::FreeSansBold9pt7b);
+    d.setTextColor(C_WHITE);
+    d.drawString("Tap to start", 160, 154);
+  }
+}
+
+static void moleStart() {
+  for (int i = 0; i < MOLES; i++) moleUpUntil[i] = moleBonkUntil[i] = 0;
+  moleScore = 0;
+  moleState = MoleState::Playing;
+  moleRoundEnd = millis() + MOLE_ROUND_MS;
+  moleNextSpawn = millis() + 600;
+  drawMoles();
+}
+
+static void enterMoles() { if (moleState == MoleState::Playing) moleState = MoleState::Over; }
+
+static void handleMoles(const m5::touch_detail_t& t) {
+  int dir;
+  if (flickedX(t, dir) && dir < 0 && moleState != MoleState::Playing) { buzz(); showScreen(Screen::PlayHome); return; }
+  if (!t.wasPressed()) return;
+  if (moleState != MoleState::Playing) { buzz(); moleStart(); return; }
+  for (int i = 0; i < MOLES; i++) {
+    if (!moleUpUntil[i]) continue;
+    int cx, cy;
+    moleCenter(i, cx, cy);
+    if (abs(t.x - cx) > 40 || t.y < cy - 52 || t.y > cy + 18) continue;
+    moleUpUntil[i] = 0;
+    moleBonkUntil[i] = millis() + 300;
+    moleScore++;
+    buzz();
+    if (!btConnected && !musicIsPlaying()) M5.Speaker.tone(880, 60, 1, true);
+    drawMoleCell(i);
+    drawMoleHeader();
+    return;
+  }
+}
+
+static void serviceMoles() {
+  if (moleState != MoleState::Playing) return;
+  uint32_t now = millis();
+  lastTouchMs = now;
+  for (int i = 0; i < MOLES; i++) {
+    if (moleUpUntil[i] && (int32_t)(now - moleUpUntil[i]) >= 0) { moleUpUntil[i] = 0; drawMoleCell(i); }
+    if (moleBonkUntil[i] && (int32_t)(now - moleBonkUntil[i]) >= 0) { moleBonkUntil[i] = 0; drawMoleCell(i); }
+  }
+  if ((int32_t)(now - moleNextSpawn) >= 0) {
+    int speed = std::min(moleScore, 30);  // faster as they score
+    int up = 1500 - speed * 25, gap = 900 - speed * 15;
+    int maxUp = moleScore < 10 ? 1 : moleScore < 20 ? 2 : 3, nUp = 0;
+    for (int i = 0; i < MOLES; i++) nUp += moleUpUntil[i] != 0;
+    if (nUp < maxUp) {
+      for (int tries = 0; tries < 12; tries++) {
+        int i = rnd(0, MOLES - 1);
+        if (moleUpUntil[i] || moleBonkUntil[i]) continue;
+        moleUpUntil[i] = now + up;
+        drawMoleCell(i);
+        break;
+      }
+    }
+    moleNextSpawn = now + gap + rnd(0, 300);
+  }
+  static uint32_t lastBar = 0;
+  if (now - lastBar > 250) { lastBar = now; drawMoleHeader(); }
+  if ((int32_t)(now - moleRoundEnd) >= 0) {  // time's up
+    moleState = MoleState::Over;
+    if (moleScore > moleBest) { moleBest = moleScore; prefs.putUShort("molebest", moleBest); }
+    chime(true);
+    buzz(2);
+    for (int i = 0; i < MOLES; i++) moleUpUntil[i] = moleBonkUntil[i] = 0;
+    drawMoles();
+  }
+}
+
 // ================= Play: the game picker (middle button) =================
-// A 2x2 grid of big game tiles. Inside a game, swipe right (or the middle button) comes back here.
-struct GameTile { const char* name; const char* icon; uint8_t r, g, b; Screen screen; Quiz* quiz; };
+// A 3x2 grid of big game tiles (icon and name), swipe up/down for more. Inside a game, swipe right (or the middle button) comes back here.
+struct GameTile { const char* name; const char* icon; uint8_t r, g, b; Screen screen; };  // icon nullptr = drawn
 static const GameTile GAMES[] = {
-    {"Missing Letter", "c_t", 255, 89, 140, Screen::Spell, &spellQuiz},
-    {"Right Spelling", "Aa", 0, 170, 170, Screen::Words, &wordsQuiz},
-    {"Telling Time", nullptr, 255, 146, 76, Screen::Clock, &clockQuiz},  // icon: a little clock face
-    {"Math", "1+2", 138, 80, 236, Screen::Math, &mathQuiz},
+    {"Missing Letter", "c_t", 255, 89, 140, Screen::Spell},
+    {"Right Spelling", "Aa", 0, 170, 170, Screen::Words},
+    {"Telling Time", nullptr, 255, 146, 76, Screen::Clock},
+    {"Simon", nullptr, 60, 66, 110, Screen::Simon},
+    {"Memory Match", nullptr, 110, 70, 200, Screen::Memory},
+    {"What Comes Next?", nullptr, 25, 150, 220, Screen::Pattern},
+    {"Tilt Maze", nullptr, 0, 150, 120, Screen::Maze},
+    {"Whack-a-Mole", nullptr, 60, 140, 70, Screen::Moles},
+    {"Math", "1+2", 138, 80, 236, Screen::Math},
 };
 static constexpr int GAME_COUNT = sizeof GAMES / sizeof *GAMES;
-static constexpr int GT_Y = 26, GT_W = 151, GT_H = 102, GT_GAP = 6;
+static constexpr int GT_Y = 26, GT_W = 100, GT_H = 100, GT_GAP = 7, GT_PER_PAGE = 6;
+static int gamesPage = 0;
+static int gamePages() { return (GAME_COUNT + GT_PER_PAGE - 1) / GT_PER_PAGE; }
 
-static void gameTileRect(int i, int& x, int& y) {
-  x = 6 + (i % 2) * (GT_W + GT_GAP);
-  y = GT_Y + (i / 2) * (GT_H + GT_GAP);
+static void gameTileRect(int i, int& x, int& y) {  // i: position on the page
+  x = 3 + (i % 3) * (GT_W + GT_GAP);
+  y = GT_Y + (i / 3) * (GT_H + GT_GAP);
 }
 
 static void drawPlayHome() {
   auto& d = M5.Display;
   d.fillRect(0, TOP_H, 320, 240 - TOP_H, C_BG);
-  for (int i = 0; i < GAME_COUNT; i++) {
+  for (int k = 0; k < GT_PER_PAGE; k++) {
+    int i = gamesPage * GT_PER_PAGE + k;
+    if (i >= GAME_COUNT) break;
     const GameTile& g = GAMES[i];
     int x, y;
-    gameTileRect(i, x, y);
+    gameTileRect(k, x, y);
     int cx = x + GT_W / 2;
     d.fillRoundRect(x, y + 3, GT_W, GT_H, 16, C_SHADE);
     d.fillRoundRect(x, y, GT_W, GT_H, 16, rgb(g.r, g.g, g.b));
+    int iy = y + 34;  // icon, with the name (wrapped) below it
     if (g.icon) {
       d.setFont(&fonts::FreeSansBold24pt7b);
       d.setTextDatum(middle_center);
       d.setTextColor(C_WHITE);
-      d.drawString(g.icon, cx, y + 32);
-    } else {
-      d.fillCircle(cx, y + 32, 21, C_WHITE);
-      d.drawWideLine(cx, y + 32, cx, y + 17, 2.5f, rgb(g.r, g.g, g.b));
-      d.drawWideLine(cx, y + 32, cx + 10, y + 36, 3.5f, rgb(g.r, g.g, g.b));
-      d.fillCircle(cx, y + 32, 3, rgb(g.r, g.g, g.b));
+      d.drawString(g.icon, cx, iy);
+    } else if (g.screen == Screen::Clock) {  // a little clock face
+      d.fillCircle(cx, iy, 21, C_WHITE);
+      d.drawWideLine(cx, iy, cx, iy - 15, 2.5f, rgb(g.r, g.g, g.b));
+      d.drawWideLine(cx, iy, cx + 10, iy + 4, 3.5f, rgb(g.r, g.g, g.b));
+      d.fillCircle(cx, iy, 3, rgb(g.r, g.g, g.b));
+    } else if (g.screen == Screen::Simon) {  // four little colored pads
+      for (int p = 0; p < 4; p++) {
+        const uint8_t* c = SIMON_COL[p];
+        d.fillRoundRect(cx - 21 + (p % 2) * 22, iy - 21 + (p / 2) * 22, 20, 20, 5, rgb(c[0], c[1], c[2]));
+      }
+    } else if (g.screen == Screen::Memory) {  // two cards, one flipped
+      d.fillRoundRect(cx - 26, iy - 18, 24, 34, 5, rgb(170, 140, 240));
+      d.fillRoundRect(cx + 2, iy - 18, 24, 34, 5, rgb(245, 242, 232));
+      drawShape(5, 0, cx + 14, iy - 1, 8, rgb(245, 242, 232));
+    } else if (g.screen == Screen::Pattern) {  // circle, square, circle, ?
+      drawShape(0, 0, cx - 33, iy, 9, rgb(g.r, g.g, g.b));
+      drawShape(1, 3, cx - 11, iy, 9, rgb(g.r, g.g, g.b));
+      drawShape(0, 0, cx + 11, iy, 9, rgb(g.r, g.g, g.b));
+      d.setFont(&fonts::FreeSansBold12pt7b);
+      d.setTextDatum(middle_center);
+      d.setTextColor(C_WHITE);
+      d.drawString("?", cx + 33, iy + 1);
+    } else if (g.screen == Screen::Maze) {  // a tiny maze with a ball
+      uint16_t wc = C_WHITE;
+      d.drawRect(cx - 22, iy - 20, 44, 40, wc);
+      d.drawFastVLine(cx - 8, iy - 20, 26, wc);
+      d.drawFastVLine(cx + 7, iy - 6, 26, wc);
+      d.drawFastHLine(cx + 7, iy - 6, 15, wc);
+      d.fillCircle(cx - 15, iy - 13, 4, rgb(255, 120, 60));
+      drawStar(cx + 15, iy + 13, 5, C_YELLOW);
+    } else {  // a mole peeking out
+      d.fillEllipse(cx, iy + 14, 24, 7, rgb(60, 35, 20));
+      d.fillCircle(cx, iy - 2, 15, rgb(150, 100, 60));
+      d.fillRect(cx - 15, iy - 2, 31, 14, rgb(150, 100, 60));
+      d.fillEllipse(cx, iy + 4, 7, 5, rgb(235, 200, 160));
+      d.fillCircle(cx - 6, iy - 6, 2, C_SHADE);
+      d.fillCircle(cx + 6, iy - 6, 2, C_SHADE);
+      d.fillEllipse(cx, iy + 14, 24, 3, rgb(60, 35, 20));
     }
-    d.setFont(&fonts::FreeSansBold9pt7b);
-    d.setTextDatum(middle_center);
-    d.setTextColor(C_WHITE);
-    d.drawString(g.name, cx, y + 66);
-    d.fillRoundRect(cx - 44, y + 78, 88, 18, 9, rgb(g.r / 2, g.g / 2, g.b / 2));
-    drawStar(cx - 30, y + 87, 6, C_YELLOW);
-    d.drawString("Level " + String(g.quiz->level), cx + 6, y + 88);
+    drawTitle(g.name, cx, y + 78, GT_W - 10, 38, C_WHITE, true);
   }
+  int pages = gamePages();
+  for (int pg = 0; pg < pages && pages > 1; pg++)
+    d.fillCircle(160 - (pages - 1) * 6 + pg * 12, 237, 2, pg == gamesPage ? C_WHITE : C_DIM);
 }
 
 static void handlePlayHome(const m5::touch_detail_t& t) {
+  int dir;
+  if (flickedY(t, dir)) {  // swipe up = next page
+    int pg = constrain(gamesPage + dir, 0, gamePages() - 1);
+    if (pg != gamesPage) { buzz(); gamesPage = pg; drawPlayHome(); }
+    return;
+  }
   if (!t.wasClicked()) return;
-  for (int i = 0; i < GAME_COUNT; i++) {
-    int x, y;
-    gameTileRect(i, x, y);
+  for (int k = 0; k < GT_PER_PAGE; k++) {
+    int i = gamesPage * GT_PER_PAGE + k, x, y;
+    if (i >= GAME_COUNT) break;
+    gameTileRect(k, x, y);
     if (t.x >= x - 3 && t.x < x + GT_W + 3 && t.y >= y - 3 && t.y < y + GT_H + 3) { buzz(); showScreen(GAMES[i].screen); return; }
   }
 }
@@ -2852,6 +3661,73 @@ static void serviceSleep() {
   }
 }
 
+// ================= Nightly podcast sync =================
+// Once a night between midnight and 5 am, when it's plugged in and nothing is playing,
+// the Core2 syncs podcasts. In Bluetooth mode it quietly reboots into WiFi mode, syncs,
+// and reboots back. The screen stays dark (or keeps the night-light glowing) throughout.
+static constexpr uint32_t NIGHT_WIFI_WAIT_MS = 3 * 60000UL, NIGHT_MAX_MS = 90 * 60000UL;
+
+static uint32_t todayStamp() {
+  m5::rtc_datetime_t dt;
+  if (!M5.Rtc.isEnabled() || !M5.Rtc.getDateTime(&dt) || dt.date.year < 2024) return 0;
+  return dt.date.year * 10000UL + dt.date.month * 100 + dt.date.date;
+}
+
+static bool haveFeeds() {
+  File f = SD.open("/podcasts/feeds.txt");
+  bool ok = f && f.size() > 0;
+  if (f) f.close();
+  return ok;
+}
+
+// Remembers what's on screen so the reboots come back to it, dark.
+static void nightReboot(bool toWifi) {
+  prefs.putUChar("nightsync", toWifi);
+  prefs.putUChar("nightboot", 1);
+  prefs.putUChar("nightscreen", screen == Screen::Sleep);
+  prefs.putUChar("nightlight", nightLight);
+  switchMode(true);
+}
+
+static bool nightReturnPending = false;  // synced; back to Bluetooth once nobody's using it
+
+static void nightSyncDone() {
+  uint32_t today = todayStamp();
+  if (today) prefs.putUInt("nightdone", today);
+  nightSync = false;
+#if CORE2_WIFI
+  nightReturnPending = true;
+#endif
+}
+
+static void nightlyCheck() {
+  static uint32_t last = 0;
+  uint32_t now = millis();
+#if CORE2_WIFI
+  if (nightSync) {  // give up if WiFi never comes or the sync drags on
+    if ((!webUp && now > NIGHT_WIFI_WAIT_MS) || now > NIGHT_MAX_MS) nightSyncDone();
+    return;
+  }
+  if (nightReturnPending) {  // a kid may have woken it up: don't cut off their music
+    if (!musicIsPlaying() && !sleepSound && now - lastTouchMs > 60000) { nightReturnPending = false; nightReboot(false); }
+    return;
+  }
+#endif
+  if (now - last < 30000) return;
+  last = now;
+  int h, m;
+  if (!rtcNow(h, m) || h >= 5) return;
+  uint32_t today = todayStamp();
+  if (!today || prefs.getUInt("nightdone", 0) == today) return;
+  if (!usbPower() || musicIsPlaying() || sleepSound || sleepTimerEnd || fadeStart) return;
+  if (!prefs.isKey("ssid") || !haveFeeds()) { prefs.putUInt("nightdone", today); return; }  // nothing to do tonight
+#if CORE2_WIFI
+  if (syncState == SyncState::Idle) { prefs.putUInt("nightdone", today); requestSync(); }
+#else
+  nightReboot(true);
+#endif
+}
+
 // ================= Grown-ups (hold the top of the screen for 3 s) =================
 // Header with Done, then three tabs: Settings, Bluetooth (WiFi in WiFi mode), Stats.
 static int guTab = 0, statsPage = 0;
@@ -2949,23 +3825,29 @@ static void drawStats() {
     drawStatTile(0, 2, "SD CARD", bytesText(sdUsed) + " of " + bytesText(sdTotal), rgb(138, 80, 236));
     drawStatTile(1, 2, "LIBRARY", String(albums.size()) + " albums, " + String(songCountCache) + " songs", rgb(255, 70, 160));
     drawStatTile(0, 3, "VERSION", String(TT_VERSION) + (CORE2_WIFI ? "  (WiFi mode)" : "  (Bluetooth mode)"), C_GREEN, true);
-  } else if (statsPage == 1) {  // the kids
+  } else if (statsPage == 1) {  // listening and the play-for-fun games
     drawStatTile(0, 0, "LISTENING TIME", duration(listenSec), C_GREEN);
     drawStatTile(1, 0, "SONGS PLAYED", String(songsPlayed), C_GREEN);
-    auto game = [](const Quiz& q) { return "Level " + String(q.level) + ", " + String(q.stars) + " stars"; };
-    drawStatTile(0, 1, "MISSING LETTER", game(spellQuiz), rgb(255, 89, 140));
-    drawStatTile(1, 1, "RIGHT SPELLING", game(wordsQuiz), rgb(0, 170, 170));
-    drawStatTile(0, 2, "TELLING TIME", game(clockQuiz), C_ORANGE);
-    drawStatTile(1, 2, "MATH", game(mathQuiz), rgb(138, 80, 236));
-    drawStatTile(0, 3, "VOLUME", String(volLevel * 10) + "% of " + String(maxVolPct) + "% max", C_ORANGE);
 #if CORE2_WIFI
-    drawStatTile(1, 3, "WIFI", WiFi.status() == WL_CONNECTED ? String(WiFi.RSSI()) + " dBm signal" : String("Not connected"), C_BLUE);
+    drawStatTile(0, 1, "WIFI", WiFi.status() == WL_CONNECTED ? String(WiFi.RSSI()) + " dBm signal" : String("Not connected"), C_BLUE);
 #else
     xSemaphoreTake(btLock, portMAX_DELAY);
     String bt = btConnected ? (btName.length() ? btName : String("Connected")) : String("Speaker");
     xSemaphoreGive(btLock);
-    drawStatTile(1, 3, "PLAYING TO", bt, C_BLUE);
+    drawStatTile(0, 1, "PLAYING TO", bt, C_BLUE);
 #endif
+    drawStatTile(1, 1, "VOLUME", String(volLevel * 10) + "% of " + String(maxVolPct) + "% max", C_ORANGE);
+    drawStatTile(0, 2, "SIMON", "Best " + String(simonBest) + " in a row", rgb(40, 200, 90));
+    drawStatTile(1, 2, "WHACK-A-MOLE", "Best " + String(moleBest), rgb(150, 100, 60));
+    drawStatTile(0, 3, "MEMORY MATCH", "Level " + String(memLevel) + " of 4", rgb(110, 70, 200));
+    drawStatTile(1, 3, "TILT MAZE", "Level " + String(mazeLevel) + " of 5", rgb(0, 150, 120));
+  } else if (statsPage == 2) {  // the learning games
+    auto game = [](const Quiz& q) { return "Level " + String(q.level) + ", " + String(q.stars) + " stars"; };
+    drawStatTile(0, 0, "MISSING LETTER", game(spellQuiz), rgb(255, 89, 140));
+    drawStatTile(1, 0, "RIGHT SPELLING", game(wordsQuiz), rgb(0, 170, 170));
+    drawStatTile(0, 1, "TELLING TIME", game(clockQuiz), C_ORANGE);
+    drawStatTile(1, 1, "MATH", game(mathQuiz), rgb(138, 80, 236));
+    drawStatTile(0, 2, "WHAT COMES NEXT?", game(patternQuiz), C_BLUE);
   } else {  // technical
     const esp_partition_t* run = esp_ota_get_running_partition();
     drawStatTile(0, 0, "CHIP", "ESP32 rev " + String(ESP.getChipRevision()) + ", " + String(ESP.getCpuFreqMHz()) + " MHz", C_DIM);
@@ -2977,7 +3859,7 @@ static void drawStats() {
     drawStatTile(0, 3, "MEMORY FREE", String(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024) + " KB + " +
                  fixed(ESP.getFreePsram() / 100000, 10, 1) + " MB PSRAM", C_BLUE, true);
   }
-  for (int p = 0; p < 3; p++) d.fillCircle(144 + p * 16, 236, 3, p == statsPage ? C_WHITE : C_DIM);
+  for (int p = 0; p < 4; p++) d.fillCircle(136 + p * 16, 236, 3, p == statsPage ? C_WHITE : C_DIM);
 }
 
 static void drawGrownupsBody() {
@@ -3073,7 +3955,7 @@ static void applyBrightness() { M5.Display.setBrightness(BRIGHTNESS[brightIdx]);
 
 static void handleGrownups(const m5::touch_detail_t& t) {
   if (statsPage >= 0 && guTab == 2 && t.wasFlicked() && abs(t.distanceX()) > 40) {
-    buzz(); statsPage = (statsPage + 1) % 3; drawStats(); return;
+    buzz(); statsPage = (statsPage + 1) % 4; drawStats(); return;
   }
   if (!t.wasClicked()) return;
   if (t.y < GU_TABS_Y - 4) {  // header
@@ -3122,7 +4004,7 @@ static void handleGrownups(const m5::touch_detail_t& t) {
 #endif
   } else {  // stats: tap to flip pages
     buzz();
-    statsPage = (statsPage + 1) % 3;
+    statsPage = (statsPage + 1) % 4;
     drawStats();
   }
 }
@@ -3140,6 +4022,10 @@ static void trackListening() {
 // ----- screen switching / redraw -----
 static void showScreen(Screen s) {
   if (isQuiz(s)) enterQuiz(s);
+  if (s == Screen::Simon) enterSimon();
+  if (s == Screen::Memory) enterMemory();
+  if (s == Screen::Maze) enterMaze();
+  if (s == Screen::Moles) enterMoles();
   screen = s;
   dirtyAll = true;
 }
@@ -3156,6 +4042,10 @@ static void redraw() {
     else if (screen == Screen::Tracks) drawTracks();
     else if (isQuiz(screen)) drawQuiz(screen);
     else if (screen == Screen::PlayHome) drawPlayHome();
+    else if (screen == Screen::Simon) drawSimon();
+    else if (screen == Screen::Memory) drawMemory();
+    else if (screen == Screen::Maze) drawMaze();
+    else if (screen == Screen::Moles) drawMoles();
     else if (screen == Screen::Sleep) drawSleep();
     else { drawGrownups(); connectDirty = false; }
   }
@@ -3221,17 +4111,17 @@ static void handleAlbums(const m5::touch_detail_t& t) {
 
 static void handleTracks(const m5::touch_detail_t& t) {
   auto scroll = [&](int by) {
-    int top = constrain(tracksTop + by, 0, std::max(0, (int)viewTracks.size() - TR_ROWS));
+    int top = constrain(tracksTop + by, 0, std::max(0, (int)viewTracks.size() - trRows()));
     if (top != tracksTop) { buzz(); tracksTop = top; dirtyAll = true; }
   };
   auto back = [&] { buzz(); albumsPage = viewAlbum / TILES; showScreen(Screen::Albums); };
   int dir;
-  if (flickedY(t, dir)) { scroll(dir * (TR_ROWS - 1)); return; }  // keep one row for context
+  if (flickedY(t, dir)) { scroll(dir * (trRows() - 1)); return; }  // keep one row for context
   if (flickedX(t, dir) && dir < 0) { back(); return; }            // swipe right = back
   if (!t.wasClicked()) return;
   if (t.y < TR_Y - 3) { if (t.y >= TOP_H) back(); return; }       // tap the album header = back
-  int r = (t.y - TR_Y) / TR_ROW_H, i = tracksTop + r;
-  if (r >= TR_ROWS || i >= (int)viewTracks.size()) return;
+  int r = (t.y - TR_Y) / trRowH(), i = tracksTop + r;
+  if (r >= trRows() || i >= (int)viewTracks.size()) return;
   buzz();
   if (viewAlbum == playAlbum && i == current) {  // the song that's already on: don't restart it
     if (paused) togglePause();
@@ -3264,7 +4154,8 @@ static void handleInput() {
   // hold the top of the screen for 3 seconds -> grown-ups screen
   static bool holdArmed = false;
   static uint32_t lastHoldDraw = 0;
-  bool listScreen = screen == Screen::Albums || screen == Screen::Tracks || screen == Screen::PlayHome;  // content right under the bar
+  bool listScreen = screen == Screen::Albums || screen == Screen::Tracks || screen == Screen::PlayHome ||
+                    screen == Screen::Memory || screen == Screen::Maze || screen == Screen::Moles;  // content right under the bar
   if (t.isPressed() && t.base_y < (listScreen ? TOP_H + 2 : HOLD_ZONE) && screen != Screen::Grownups) {
     uint32_t held = millis() - t.base_msec;
     if (held > 500 && millis() - lastHoldDraw > 100) {  // quick taps stay quiet
@@ -3307,8 +4198,13 @@ static void handleInput() {
     case Screen::Spell:
     case Screen::Math:
     case Screen::Clock:
-    case Screen::Words: handleQuiz(screen, t); break;
+    case Screen::Words:
+    case Screen::Pattern: handleQuiz(screen, t); break;
+    case Screen::Memory: handleMemory(t); break;
+    case Screen::Maze: handleMaze(t); break;
+    case Screen::Moles: handleMoles(t); break;
     case Screen::PlayHome: handlePlayHome(t); break;
+    case Screen::Simon: handleSimon(t); break;
     case Screen::Sleep: handleSleep(t); break;
     case Screen::Player: handlePlayer(t); break;
     case Screen::Albums: handleAlbums(t); break;
@@ -3335,6 +4231,8 @@ static void handleIdle() {
 // Line protocol at 460800 baud (driven by upload.py):
 //   PING                 -> PONG bt | PONG wifi [<ip>]
 //   BAT                  -> BAT <percent> <charging|discharging> <millivolts> <milliamps>
+//   VER                  -> VER <version> <bt|wifi>
+//   IMU                  -> IMU <ax> <ay> <az> in hundredths of g (Tilt Maze axis check)
 //                           (milliamps: + charging, - draining)
 //   LS                   -> one "F <path> <size>" per file (up to two folders deep), then "END"
 //   PUT <path> <size>    -> OK, then host sends raw bytes in UP_CHUNK blocks,
@@ -3419,7 +4317,11 @@ static void handleSerial() {
   if (!Serial.available()) return;
   String line = Serial.readStringUntil('\n');
   line.trim();
-  if (line == "VER") Serial.printf("VER %s %s\n", TT_VERSION, CORE2_WIFI ? "wifi" : "bt");
+  if (line == "IMU") {  // accelerometer in g, for checking the Tilt Maze axes
+    float ax, ay, az;
+    M5.Imu.getAccel(&ax, &ay, &az);
+    Serial.printf("IMU %d %d %d\n", (int)(ax * 100), (int)(ay * 100), (int)(az * 100));
+  } else if (line == "VER") Serial.printf("VER %s %s\n", TT_VERSION, CORE2_WIFI ? "wifi" : "bt");
   else if (line == "PING") {
 #if CORE2_WIFI
     if (WiFi.status() == WL_CONNECTED) Serial.printf("PONG wifi %s\n", WiFi.localIP().toString().c_str());
@@ -3499,19 +4401,24 @@ void setup() {
   cfg.serial_baudrate = 460800;  // the Core2's CH9102 garbles 921600
   M5.begin(cfg);
   M5.Display.setRotation(ROTATION);
-  M5.Display.setBrightness(140);  // the saved brightness is applied once prefs are loaded
-  M5.Display.fillScreen(C_BG);
-
   prefs.begin("core2mp3");  // settings namespace from the project's first name; renaming it would reset them
+  bool nightBoot = prefs.getUChar("nightboot", 0);  // a quiet reboot for the nightly podcast sync
+  M5.Display.setBrightness(nightBoot ? 0 : 140);   // the saved brightness is applied below
+  M5.Display.fillScreen(C_BG);
   volLevel = prefs.getUChar("lvl", 6);
   maxVolPct = prefs.getUChar("maxvol", 70);
   loadQuizProgress();
+  simonBest = prefs.getUShort("simonbest", 0);
+  memLevel = constrain((int)prefs.getUChar("memlvl", 1), 1, 4);
+  mazeLevel = constrain((int)prefs.getUChar("mazelvl", 1), 1, 5);
+  moleBest = prefs.getUShort("molebest", 0);
   brightIdx = constrain((int)prefs.getUChar("bright", 1), 0, 2);
   autoOffIdx = constrain((int)prefs.getUChar("autooff", 0), 0, 2);
   wakeMin = prefs.getUShort("wake", 7 * 60);
+  nightSync = CORE2_WIFI && prefs.getUChar("nightsync", 0);
   listenSec = prefs.getUInt("listensec", 0);
   songsPlayed = prefs.getUInt("played", 0);
-  applyBrightness();
+  if (!nightBoot) applyBrightness();
 
   {  // the speaker task does the I2S work; pin it off the decode core
     auto spk = M5.Speaker.config();
@@ -3568,6 +4475,14 @@ void setup() {
     }
   }
   lastTouchMs = millis();
+  if (nightBoot) {  // stay dark; keep the night-light glowing if it was
+    prefs.remove("nightboot");
+    if (!nightSync) prefs.remove("nightsync");
+    nightLight = prefs.getUChar("nightlight", 0);
+    if (prefs.getUChar("nightscreen", 0)) screen = Screen::Sleep;
+    dimmed = true;
+    M5.Display.setBrightness(screen == Screen::Sleep && nightLight ? 60 : 0);
+  }
 }
 
 void loop() {
@@ -3592,6 +4507,11 @@ void loop() {
   handleInput();
   buzzService();
   if (isQuiz(screen)) serviceQuiz(screen);
+  nightlyCheck();
+  if (screen == Screen::Simon) serviceSimon();
+  if (screen == Screen::Memory) serviceMemory();
+  if (screen == Screen::Maze) serviceMaze();
+  if (screen == Screen::Moles) serviceMoles();
   serviceSleep();
   trackListening();
   static uint32_t lastStats = 0;
