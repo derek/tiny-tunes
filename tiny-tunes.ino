@@ -503,7 +503,7 @@ WiFi mode connects. They play like albums in Bluetooth mode.</div>
 <div class="ctl"><input type="text" id="feedurl" placeholder="https://... feed or Apple Podcasts link" style="flex:3">
 <select id="feedkeep" title="Episodes to keep"><option value="3">Keep 3</option><option value="5" selected>Keep 5</option><option value="10">Keep 10</option></select>
 <button onclick="addFeed()" style="flex:1">Add</button></div>
-<div class="ctl"><button onclick="syncNow()">&#8635; Sync now</button></div>
+<div class="ctl"><button onclick="syncNow()">&#8635; Sync now</button><button id="syncstop" onclick="stopSync()" hidden>&#9632; Stop</button></div>
 <div id="syncline" class="dim"></div><progress id="syncprog" value="0" max="100" hidden></progress>
 <div id="pods"></div>
 
@@ -668,7 +668,7 @@ async function loadPods(){clearTimeout(podTimer);let p;try{p=await (await fetch(
  const busy=p.state!='idle';
  $('syncline').innerHTML=esc(p.status)+(p.error?` <span class="warn">${esc(p.error)}</span>`:'')+
   (!busy&&p.ago>=0?` <span class="dim">(checked ${p.ago<1?'just now':p.ago<120?p.ago+' min ago':Math.round(p.ago/60)+' h ago'})</span>`:'');
- $('syncprog').hidden=!(busy&&p.pct>=0);$('syncprog').value=Math.max(p.pct,0);
+ $('syncprog').hidden=!(busy&&p.pct>=0);$('syncprog').value=Math.max(p.pct,0);$('syncstop').hidden=!busy;
  const open=new Set([...document.querySelectorAll('#pods details[open]')].map(d=>d.dataset.url));
  $('pods').innerHTML=p.feeds.length?'':'<p class="dim">No podcasts yet.</p>';
  p.feeds.forEach((f,i)=>{const d=document.createElement('details');d.dataset.url=f.url;if(open.has(f.url))d.open=true;
@@ -691,6 +691,7 @@ async function removeFeed(i){if(!confirm('Remove this podcast? Its downloaded ep
 async function delEpisode(folder,file){if(!confirm('Delete this episode? (It may download again on the next sync if it is still one of the newest.)'))return;
  await post('/rm?path='+q(join(folder,file)));await post('/rescan');loadPods();loadLib()}
 async function syncNow(){await post('/podcast/sync');setTimeout(loadPods,500)}
+async function stopSync(){await post('/podcast/stop');setTimeout(loadPods,300)}
 
 loadLib();loadPods();setInterval(refreshNow,5000);
 </script></body></html>)HTML";
@@ -1026,6 +1027,20 @@ static void finishDownload(bool ok) {
 
 static void requestSync() { syncRequested = true; }
 
+// The web page's Stop: ends a sync in the middle. Episodes already downloaded stay; a
+// half-downloaded one is dropped. It doesn't start again by itself until the next WiFi
+// connect, the nightly sync or Sync now.
+static void stopSync() {
+  if (syncState == SyncState::Idle) return;
+  if (syncState == SyncState::Download && syncIdx < (int)syncQueue.size()) {
+    syncFile.close();
+    SD.remove(syncQueue[syncIdx].path + ".part");
+  }
+  syncError = "";
+  finishSync();
+  syncStatus = "Stopped";
+}
+
 // Called from wifiLoop() while connected.
 static void podcastLoop() {
   uint32_t now = millis();
@@ -1123,6 +1138,7 @@ static void setupPodcastWeb() {
     web.send(200, "text/plain", "OK");
   });
   web.on("/podcast/sync", HTTP_POST, [] { requestSync(); web.send(200, "text/plain", "OK"); });
+  web.on("/podcast/stop", HTTP_POST, [] { stopSync(); web.send(200, "text/plain", "OK"); });
 }
 
 static void setupWeb() {

@@ -6,6 +6,12 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.8.3 — 2026-10-24
+
+### Added
+- A Stop button for the podcast sync on the web page (and `POST /podcast/stop`).
+  Finished episodes stay; a half-downloaded one is dropped.
+
 ## 0.8.2 — 2026-10-24
 
 ### Changed
