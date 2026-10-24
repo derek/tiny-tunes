@@ -5,12 +5,14 @@ A kids' audio player for the [M5Stack Core2](https://docs.m5stack.com/en/core/co
 Built for a 5- and a 7-year-old: big picture buttons, no internet browsing, everything
 chosen by a grown-up.
 
-The three touch buttons above the screen are **Back**, **Home** and **Playing**, with an
-icon for each along the top of the screen. Home is the shelves (Music, Podcasts, Books)
+The three touch buttons below the screen are **Back**, **Home** and **Playing**. Home is the shelves (Music, Podcasts, Books)
 as tall Yoto-style cards; then albums as tall cards, three at a time; then the songs.
 The player keeps it simple: the title, big buttons, and a volume button with 5 steps.
 Books and podcasts skip 15 s back / 30 s ahead and resume where they stopped.
 Snackbars at the bottom say when the battery is low, it's charging, or headphones connect.
+
+A quick tap on the power button turns the screen off (the music keeps playing) and on
+again; holding it for a second switches Tiny Tunes off.
 
 Holding two of the touch buttons together for 3 seconds opens the grown-ups screen
 (loudest volume, brightness, auto-off, Bluetooth pairing, WiFi, and stats).

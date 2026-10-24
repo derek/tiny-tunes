@@ -13,14 +13,14 @@
 // Build/flash both with ./flash.sh.
 //
 // Kid-friendly controls:
-//   The three touch buttons above the screen: Back, Home, Playing (icons along the top of
-//     the screen show which is which, and can be tapped too)
+//   The three touch buttons below the screen: Back, Home, Playing
 //   Home: shelves (Music, Podcasts, Books) as tall cards -> albums as tall cards -> songs
 //   Player: the title, big prev / play / next (books and podcasts: back 15 s / ahead 30 s),
 //     and the volume button (5 steps)
 //   Albums page sideways; lists scroll up/down; swipe the title for next / previous song
 //   Snackbars at the bottom: low battery, charging, headphones on/off
 //   Hold two of the touch buttons for 3 s: grown-ups screen
+//   Power button: tap = screen off / on (the sound keeps playing), hold = switch off
 //   Screen dims after 2 min untouched; powers off when paused on battery (15/30 min/never).
 //
 // Files can also be uploaded over USB with upload.py (see serial protocol below).
@@ -76,10 +76,10 @@ enum class ShelfKind : uint8_t { Music, Podcasts, Books, Other };
 struct Shelf { String name, path; ShelfKind kind; int albums = 0, newCount = 0; };
 struct ResumeEntry { String file; uint32_t pos; bool done; };  // books/podcasts: see "resume"
 
-// Screen upside down (USB port on top). The three touch buttons then sit above the
-// screen, read in raw panel coordinates in C, B, A order: BTN_LEFT/BTN_RIGHT keep
-// "left" meaning Back from the viewer's side.
-static constexpr int ROTATION = 3;  // 1 = normal landscape
+// Normal landscape: the three touch buttons sit below the screen. They're read in raw
+// panel coordinates, so if the screen is ever turned upside down again (3) they swap
+// sides: BTN_LEFT/BTN_RIGHT keep "left" meaning Back from the viewer's side.
+static constexpr int ROTATION = 1;  // 3 = upside down
 #define BTN_LEFT  (ROTATION == 3 ? M5.BtnC : M5.BtnA)
 #define BTN_RIGHT (ROTATION == 3 ? M5.BtnA : M5.BtnC)
 
@@ -1393,7 +1393,8 @@ static void rescanLibrary(bool keepPlaying) {
   if (!keepPlaying) stopPlayback();
   albums.clear();
   shelves.clear();
-  // the three known shelves first, in this order; empty ones are dropped below
+  // the three known shelves first, in this order; they stay even when empty (other
+  // shelves only exist when they hold albums)
   int music = addShelf("Music", "/music", ShelfKind::Music);
   addShelf("Podcasts", "/podcasts", ShelfKind::Podcasts);
   addShelf("Books", "/books", ShelfKind::Books);
@@ -1417,11 +1418,11 @@ static void rescanLibrary(bool keepPlaying) {
       albums.push_back({prettyAlbumName(sub), sp, cover, -1, shelf});
     }
   }
-  // drop empty shelves (renumbering), then order albums by shelf and name (loose songs last)
+  // drop empty extra shelves (renumbering), then order albums by shelf and name (loose songs last)
   std::vector<int> remap(shelves.size(), -1);
   std::vector<Shelf> kept;
   for (size_t i = 0; i < shelves.size(); i++) {
-    bool used = false;
+    bool used = shelves[i].kind != ShelfKind::Other;  // Music, Podcasts, Books always
     for (auto& al : albums) used |= al.shelf == (int)i;
     if (used) { remap[i] = kept.size(); kept.push_back(shelves[i]); }
   }
@@ -2003,9 +2004,8 @@ static void prepareCovers() {
 }
 
 // ================= kid-friendly UI =================
-// The three touch buttons above the screen are Back, Home and Playing, with an icon for
-// each in a thin strip along the top of the screen, right under it (the icons can be
-// tapped too). Holding two of the buttons together for 3 s opens the grown-ups screen.
+// The three touch buttons below the screen are Back, Home and Playing. Holding two of
+// them together for 3 s opens the grown-ups screen.
 // Shelves:  Music, Podcasts, Books (and any other shelf) as tall cards.
 // Albums:   tall cards, 3 at a time, paging sideways.
 // Songs:    the album's name and a Play button on top, then full-width rows.
@@ -2040,16 +2040,14 @@ static uint16_t albumTint(int a) {
   return a >= 0 && a < (int)albums.size() && albums[a].tint ? albums[a].tint : albumColor(a);
 }
 
-// The strip along the top: an icon under each touch button (left, middle, right).
-static constexpr int STRIP_H = 20;
-static const int STRIP_X[3] = {53, 160, 267};
 // Player: a line about the album, the title, big buttons; the volume button top right.
-static constexpr int P_SUB_Y = 34, P_LEFT_Y = 54, P_TITLE_CY = 100, P_TITLE_H = 58, P_CTRL_Y = 178;
+static constexpr int P_SUB_Y = 22, P_LEFT_Y = 42, P_TITLE_CY = 94, P_TITLE_H = 64, P_CTRL_Y = 176;
 static constexpr RoundButton B_PREV{62, 30}, B_PLAY{160, 38}, B_NEXT{258, 30};
-static constexpr int VB_X = 232, VB_Y = 25, VB_W = 80, VB_H = 40;  // the volume button
+static constexpr int VB_X = 232, VB_Y = 10, VB_W = 80, VB_H = 40;  // the volume button
 
 static uint32_t lastTouchMs = 0;
 static bool dimmed = false;
+static bool screenOff = false;  // the power button's tap: screen off, sound on (see handleInput)
 static int albumsPage = 0;
 static int viewAlbum = -1, tracksTop = 0;
 static std::vector<String> viewTracks;
@@ -2313,32 +2311,6 @@ static void drawAlbumCard(int a, int x, int y, int w, int h) {
 // Something's loaded: the Playing button has somewhere to go.
 static bool haveNowPlaying() { return current >= 0 && !tracks.empty(); }
 
-// ----- the strip of button icons -----
-static void iconBack(int x, int y, uint16_t c) {
-  M5.Display.fillTriangle(x - 10, y, x - 2, y - 8, x - 2, y + 8, c);
-  M5.Display.fillRect(x - 3, y - 2, 13, 5, c);
-}
-static void iconHome(int x, int y, uint16_t c, uint16_t bg) {
-  M5.Display.fillTriangle(x - 11, y - 1, x, y - 9, x + 11, y - 1, c);
-  M5.Display.fillRect(x - 7, y - 1, 15, 9, c);
-  M5.Display.fillRect(x - 2, y + 3, 5, 5, bg);  // the door
-}
-
-// `here` lights up the icon for the place that's showing: 1 home (shelves), 2 the player.
-static void drawStrip(int here) {
-  auto& d = M5.Display;
-  uint16_t lit = rgb(35, 42, 85);
-  d.fillRect(0, 0, 320, STRIP_H, C_BAR);
-  if (here >= 0) d.fillRoundRect(STRIP_X[here] - 26, -6, 52, STRIP_H + 6, 6, lit);
-  int cy = STRIP_H / 2;
-  iconBack(STRIP_X[0], cy, C_WHITE);
-  iconHome(STRIP_X[1], cy, C_WHITE, here == 1 ? lit : C_BAR);
-  iconPlaying(STRIP_X[2], cy, haveNowPlaying() ? C_GREEN : C_OFF);
-#if CORE2_WIFI
-  iconWifi(306, 3, webUp ? C_WHITE : C_DIM);  // WiFi mode: the web page is (or isn't) up
-#endif
-}
-
 // ----- volume -----
 // The volume button on the player shows the level as 5 little bars; tapping it opens 5
 // big bars to pick from (each a whole column to hit). The top step is the grown-ups'
@@ -2463,7 +2435,7 @@ static void drawControls() {
 // and the volume button.
 static void drawPlayerInfo() {
   auto& d = M5.Display;
-  d.fillRect(0, STRIP_H, 320, P_CTRL_Y - B_PLAY.r - 3 - STRIP_H, C_BG);
+  d.fillRect(0, 0, 320, P_CTRL_Y - B_PLAY.r - 3, C_BG);
   bool story = storyMode();
   String n = String(current + 1) + " of " + String(tracks.size());
   String sub = story && albumKind(playAlbum) == ShelfKind::Books ? "Chapter " + n : albumName() + " - " + n;
@@ -2479,7 +2451,6 @@ static void drawPlayerInfo() {
 static void drawPlayer() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
-  drawStrip(2);
   if (tracks.empty()) {
     d.fillRoundRect(16, 44, 288, 160, 18, C_OFF);
     drawTitle("No songs yet! Ask a grown-up to add some.", 160, 124, 260, 140, C_WHITE);
@@ -2583,7 +2554,7 @@ static void watchPower() {
 // ----- albums -----
 // The shelf's name and page dots, then three tall album cards; swipe sideways for more.
 // The playing album gets a ring and a badge, podcasts with new episodes a dot.
-static constexpr int AL_HEAD_CY = STRIP_H + 14, AL_CARD_Y = STRIP_H + 28, AL_CARD_W = 90, AL_CARD_H = 180;
+static constexpr int AL_HEAD_CY = 16, AL_CARD_Y = 32, AL_CARD_W = 90, AL_CARD_H = 198;
 static constexpr int AL_GAP = 13, AL_X0 = 12, TILES = 3;
 
 static int viewShelf = 0;
@@ -2606,7 +2577,6 @@ static void drawAlbums() {
   auto& d = M5.Display;
   albumsPage = constrain(albumsPage, 0, albumPages() - 1);  // albums may have been deleted
   d.fillScreen(C_BG);
-  drawStrip(shelves.size() > 1 ? -1 : 1);  // with one shelf, this is home
   d.setFont(&fonts::FreeSansBold12pt7b);
   d.setTextDatum(middle_left);
   d.setTextColor(C_WHITE);
@@ -2616,6 +2586,11 @@ static void drawAlbums() {
     int n = std::min(pages, 12), x = 306 - (n - 1 - p) * 13;
     if (p == albumsPage) d.fillRoundRect(x - 7, AL_HEAD_CY - 3, 14, 7, 3, C_WHITE);
     else d.fillCircle(x, AL_HEAD_CY, 3, rgb(74, 81, 128));
+  }
+  if (shelfAlbums.empty()) {  // Music, Podcasts and Books show even with nothing in them
+    d.fillRoundRect(16, AL_CARD_Y + 20, 288, 150, 18, C_OFF);
+    drawTitle("Nothing here yet! Ask a grown-up to add some.", 160, AL_CARD_Y + 95, 260, 130, C_WHITE);
+    return;
   }
   for (int k = 0; k < TILES; k++) {
     int slot = albumsPage * TILES + k;
@@ -2643,20 +2618,19 @@ static void shelfTileRect(int i, int& x, int& y, int& w, int& h) {
   int n = shelves.size();
   if (n <= 3) {  // one row of tall cards
     w = (304 - (n - 1) * 10) / std::max(1, n);
-    h = 196;
+    h = 222;
     x = 8 + i * (w + 10);
-    y = STRIP_H + 6;
+    y = 6;
   } else {       // 3 x 2 grid
-    w = 96; h = 94;
+    w = 96; h = 106;
     x = 10 + (i % 3) * 104;
-    y = STRIP_H + 6 + (i / 3) * 102;
+    y = 6 + (i / 3) * 114;
   }
 }
 
 static void drawShelves() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
-  drawStrip(1);
   for (int i = 0; i < (int)shelves.size() && i < 6; i++) {
     const Shelf& sh = shelves[i];
     int x, y, w, h;
@@ -2665,14 +2639,14 @@ static void drawShelves() {
     bool tall = h > 150;
     drawCardFrame(x, y, w, h, c, false);
     int cx = x + w / 2;
-    drawShelfIcon(sh.kind, cx, y + (tall ? 70 : 38), C_WHITE, c);
-    drawTitle(sh.name, cx, y + (tall ? 136 : 76), w - 14, tall ? 40 : 26, C_WHITE, true);
+    drawShelfIcon(sh.kind, cx, y + (tall ? 80 : 42), C_WHITE, c);
+    drawTitle(sh.name, cx, y + (tall ? 152 : 84), w - 14, tall ? 40 : 26, C_WHITE, true);
     if (tall) {
       const char* noun = sh.kind == ShelfKind::Podcasts ? "shows" : sh.kind == ShelfKind::Books ? "books" : "albums";
       d.setFont(&fonts::FreeSansBold9pt7b);
       d.setTextDatum(middle_center);
       d.setTextColor(rgb(235, 240, 255));
-      d.drawString(String(sh.albums) + " " + (sh.albums == 1 ? String(noun).substring(0, strlen(noun) - 1) : String(noun)), cx, y + 170);
+      d.drawString(String(sh.albums) + " " + (sh.albums == 1 ? String(noun).substring(0, strlen(noun) - 1) : String(noun)), cx, y + 190);
     }
     if (sh.newCount > 0) {  // new podcast episodes
       String n = String(sh.newCount) + " new";
@@ -2700,13 +2674,11 @@ static void handleShelves(const m5::touch_detail_t& t) {
 }
 
 // ----- songs -----
-// A header with a small cover, the album's name and a big Play button (from the start,
-// or for books and podcasts where they stopped), then the songs as full-width rows.
-// Swipe up/down to scroll, right to go back. Songs: one-line rows (two smaller lines
-// for long titles). Podcast episodes: taller rows with a date badge.
-static constexpr int TH_CY = STRIP_H + 24, TL_Y = STRIP_H + 48, TL_X = 8, TL_W = 298;
-static constexpr int PLAY_ALL_X = 288, PLAY_ALL_R = 19;
-static int trRowH() { return isPodcastAlbum(viewAlbum) ? 58 : 34; }
+// A header with a small cover and the album's name, then the songs as full-width rows,
+// all in one font size (long titles wrap onto a second line). Swipe up/down to scroll,
+// right to go back. Podcast episodes: taller rows with a date badge.
+static constexpr int TH_CY = 24, TL_Y = 50, TL_X = 8, TL_W = 298;
+static int trRowH() { return isPodcastAlbum(viewAlbum) ? 62 : 38; }
 static int trRows() { return isPodcastAlbum(viewAlbum) ? 3 : 5; }
 
 static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown in the list
@@ -2749,7 +2721,6 @@ static void drawProgressMark(int i, int x0, int x1, int y, int h, bool playing) 
 static void drawTracks() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
-  drawStrip(-1);
   uint16_t ac = albumTint(viewAlbum);
   if (M5Canvas* cv = getCover(viewAlbum, 36)) cv->pushSprite(&d, 10, TH_CY - 18, COVER_KEY);
   else d.fillRoundRect(10, TH_CY - 18, 36, 36, 6, ac);
@@ -2759,14 +2730,10 @@ static void drawTracks() {
   d.setFont(&fonts::FreeSansBold12pt7b);
   d.setTextDatum(middle_left);
   d.setTextColor(C_WHITE);
-  d.drawString(fitLine(albums[viewAlbum].name, PLAY_ALL_X - PLAY_ALL_R - 66), 54, TH_CY - 7);
+  d.drawString(fitLine(albums[viewAlbum].name, 256), 54, TH_CY - 7);
   d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextColor(C_DIM);
   d.drawString(String(n) + " " + noun + (n == 1 ? "" : "s"), 54, TH_CY + 12);
-  if (n) {
-    drawRound(PLAY_ALL_X, TH_CY, PLAY_ALL_R, C_GREEN);
-    iconPlay(PLAY_ALL_X, TH_CY, 16, C_WHITE);
-  }
   int rowH = trRowH(), rows = trRows();
   for (int r = 0; r < rows; r++) {
     int i = tracksTop + r;
@@ -2793,8 +2760,7 @@ static void drawTracks() {
       d.setFont(&fonts::FreeSansBold9pt7b);
       int tx = TL_X + 52, tw = TL_W - 52 - 16;
       auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 3);
-      if (lines.size() > 2) { d.setFont(&fonts::DejaVu12); lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 3); }
-      int lh = lines.size() > 2 ? 14 : 17, ty = my - (int)(lines.size() - 1) * lh / 2;
+      int lh = 17, ty = my - (int)(lines.size() - 1) * lh / 2;
       d.setTextDatum(middle_left);
       d.setTextColor(C_WHITE);
       for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
@@ -2812,19 +2778,12 @@ static void drawTracks() {
       d.drawString(String(i + 1), nx, my);
     }
     int tx = TL_X + 38, tw = TL_W - 38 - (isResumable(viewAlbum) ? 22 : 8);
-    String name = trackTitle(viewTracks[i], viewAlbum);
-    d.setFont(&fonts::FreeSansBold12pt7b);
+    d.setFont(&fonts::FreeSansBold9pt7b);  // one size for every title; long ones take two lines
     d.setTextDatum(middle_left);
     d.setTextColor(C_WHITE);
-    if (d.textWidth(name) > tw) d.setFont(&fonts::FreeSansBold9pt7b);
-    if (d.textWidth(name) <= tw) {
-      d.drawString(name, tx, my);
-    } else {  // long title: two smaller lines
-      d.setFont(&fonts::DejaVu12);
-      auto lines = wrapText(name, tw, 2);
-      int lh = 13, ty = my - (int)(lines.size() - 1) * lh / 2;
-      for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
-    }
+    auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
+    int lh = 16, ty = my - (int)(lines.size() - 1) * lh / 2;
+    for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
     drawProgressMark(i, tx, TL_X + TL_W - 8, y, h, playing);
   }
   if (n > rows) {  // scroll bar
@@ -2901,7 +2860,7 @@ static void nightlyCheck() {
 #endif
 }
 
-// ================= Grown-ups (hold two touch buttons above the screen for 3 s) =================
+// ================= Grown-ups (hold two of the touch buttons for 3 s) =================
 // Header with Done, then three tabs: Settings, Bluetooth (WiFi in WiFi mode), Stats.
 static int guTab = 0, statsPage = 0;
 static Screen beforeGrownups = Screen::Player;
@@ -3203,6 +3162,7 @@ static void showScreen(Screen s) {
 }
 
 static void redraw() {
+  if (screenOff) return;  // repaints when it's turned back on
   if (volPanelUntil) return;  // the volume panel is up; everything repaints when it closes
   bool drew = false;
   if (dirtyAll) {
@@ -3242,7 +3202,7 @@ static bool flickedY(const m5::touch_detail_t& t, int& dir) {
   return true;
 }
 
-// The three buttons (and their icons along the top).
+// The three touch buttons below the screen.
 // Back: player -> its songs -> the shelf's albums -> the shelves. Home: the shelves (or
 // the albums, with just one shelf). Playing: the player.
 static void goBack() {
@@ -3295,17 +3255,6 @@ static void handleAlbums(const m5::touch_detail_t& t) {
   }
 }
 
-// Where a book or show picks up: the first track not finished yet.
-static int firstUnfinished(int a) {
-  if (!isResumable(a)) return 0;
-  auto v = loadResume(albums[a].path);
-  for (size_t i = 0; i < viewTracks.size(); i++) {
-    ResumeEntry* e = findResume(v, fileName(viewTracks[i]));
-    if (!e || !e->done) return i;
-  }
-  return 0;
-}
-
 static void handleTracks(const m5::touch_detail_t& t) {
   auto scroll = [&](int by) {
     int top = constrain(tracksTop + by, 0, std::max(0, (int)viewTracks.size() - trRows()));
@@ -3315,14 +3264,7 @@ static void handleTracks(const m5::touch_detail_t& t) {
   if (flickedY(t, dir)) { scroll(dir * (trRows() - 1)); return; }  // keep one row for context
   if (flickedX(t, dir) && dir < 0) { navigate(0); return; }       // swipe right = back
   if (!t.wasClicked()) return;
-  if (t.y < TL_Y - 4) {  // the header's Play: the album from the start (books/podcasts: where they stopped)
-    if (viewTracks.empty() || !hitAt(PLAY_ALL_X, TH_CY, PLAY_ALL_R, t.x, t.y)) return;
-    buzz();
-    if (viewAlbum != playAlbum || current < 0) playAlbumTrack(viewAlbum, firstUnfinished(viewAlbum));
-    else if (paused) togglePause();
-    showScreen(Screen::Player);
-    return;
-  }
+  if (t.y < TL_Y - 4) return;  // the header
   int r = (t.y - TL_Y) / trRowH(), i = tracksTop + r;
   if (r >= trRows() || i >= (int)viewTracks.size()) return;
   buzz();
@@ -3335,15 +3277,49 @@ static void handleTracks(const m5::touch_detail_t& t) {
 }
 
 // Grown-ups: hold two of the three touch buttons together for 3 s. A yellow strip grows
-// along the top edge meanwhile. A kid won't do that by accident, and it isn't a tap, so
+// along the bottom edge (by the buttons) meanwhile. A kid won't do that by accident, and it isn't a tap, so
 // it doesn't also go Back / Home / Playing.
 static constexpr uint32_t HOLD_MS = 3000;
 
 static void drawHoldProgress(uint32_t heldMs) {
-  M5.Display.fillRect(0, 0, 320 * std::min(heldMs, HOLD_MS) / HOLD_MS, 5, C_YELLOW);
+  M5.Display.fillRect(0, 235, 320 * std::min(heldMs, HOLD_MS) / HOLD_MS, 5, C_YELLOW);
+}
+
+// The power button: hold it (~1 s) to switch off, saving the place in a book or podcast.
+// (Held 4 s, the power chip cuts the power by itself.)
+static void powerDown() {
+  stopPlayback();  // books/podcasts: remembers the spot
+  auto& d = M5.Display;
+  d.wakeup();
+  applyBrightness();
+  d.fillScreen(C_BG);
+  drawTitle(owner.length() ? "Bye, " + owner + "!" : String("Bye!"), 160, 120, 280, 80, C_YELLOW);
+  delay(600);
+  M5.Power.Axp192.powerOff();  // straight to the PMIC; M5.Power.powerOff() drags deep-sleep code into IRAM
 }
 
 static void handleInput() {
+  // The power button: a tap turns the screen off (the music keeps playing) and on again.
+  if (M5.BtnPWR.wasHold()) { powerDown(); return; }
+  if (M5.BtnPWR.wasClicked()) {
+    buzz();
+    screenOff = !screenOff;
+    if (screenOff) {
+      volPanelUntil = 0;
+      dimmed = true;  // nothing redraws or pops up meanwhile
+      M5.Display.setBrightness(0);
+      M5.Display.sleep();
+    } else {
+      M5.Display.wakeup();
+      dimmed = false;
+      applyBrightness();
+      lastTouchMs = millis();
+      dirtyAll = true;
+    }
+    return;
+  }
+  if (screenOff) return;  // touches and the touch buttons do nothing while it's off
+
   auto t = M5.Touch.getDetail();
   if (t.base_y < 0 || t.base_y >= 240) t = m5::touch_detail_t();  // touch-button strip, read as BtnA..C
   int buttonsDown = M5.BtnA.isPressed() + M5.BtnB.isPressed() + M5.BtnC.isPressed();
@@ -3387,11 +3363,9 @@ static void handleInput() {
   }
   if (holdStart) { holdStart = 0; dirtyAll = true; }  // let go early: wipe the strip
 
-  // Back / Home / Playing: the buttons, or their icons along the top
+  // Back / Home / Playing
   int nav = -1;
   if (!afterChord && !chord) nav = BTN_LEFT.wasClicked() ? 0 : M5.BtnB.wasClicked() ? 1 : BTN_RIGHT.wasClicked() ? 2 : -1;
-  if (nav < 0 && t.wasClicked() && t.y < STRIP_H + 6 && screen != Screen::Grownups && !volPanelUntil)
-    nav = t.x < 107 ? 0 : t.x < 213 ? 1 : 2;
   if (nav >= 0) {
     if (volPanelUntil) volPanelUntil = 0;
     if (snackUp()) snackUntil = millis();
@@ -3415,7 +3389,7 @@ static void handleInput() {
 // Dim after 2 minutes untouched; power off when paused on battery (grown-ups setting).
 static void handleIdle() {
   uint32_t idle = millis() - lastTouchMs;
-  if (!dimmed && idle > 120000UL) {
+  if (!dimmed && !screenOff && idle > 120000UL) {
     dimmed = true;
     M5.Display.setBrightness(20);
   }

@@ -3,7 +3,7 @@
 Tiny Tunes is a kids' audio player (music, podcasts, audiobooks) for the M5Stack Core2,
 used by a **5-year-old and a 7-year-old**. Keep UI text and controls right for a
 pre-reader through a 2nd grader: pictures over words, big targets. The touch buttons
-above the screen are Back / Home / Playing (two held for 3 s = grown-ups). See README.md for setup, build
+below the screen are Back / Home / Playing (two held for 3 s = grown-ups). See README.md for setup, build
 and the SD card layout.
 
 ## Working agreements
@@ -35,5 +35,6 @@ and the SD card layout.
   port resets the device.
 - **Settings namespace** is `core2mp3` (the project's first name). Renaming it would
   reset everyone's settings.
-- The screen is rotated 180° (`ROTATION = 3`), so the three touch buttons sit above
-  it, read in raw panel coordinates: hence `BTN_LEFT` / `BTN_RIGHT`.
+- The screen is in normal landscape (`ROTATION = 1`), touch buttons below it. They're
+  read in raw panel coordinates, so `BTN_LEFT` / `BTN_RIGHT` swap them if it's ever
+  turned upside down (`ROTATION = 3`) again.

@@ -6,6 +6,24 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.6.1 — 2026-10-23
+
+### Changed
+- The screen is the right way up again: the three touch buttons (Back, Home,
+  Playing) are now below it, and the icon strip for them is gone, giving the
+  screens that room back (taller album and shelf cards, bigger song rows).
+- Home always shows Music, Podcasts and Books, even when the card has nothing for
+  one of them yet ("Nothing here yet!").
+- Song titles in the list are all one size; long ones wrap onto a second line.
+
+### Removed
+- The Play button at the top of the song list (tap a song instead).
+
+### Added
+- The power button: a quick tap turns the screen off (the music keeps playing, and
+  touches do nothing) and another tap turns it back on. Holding it for a second
+  switches Tiny Tunes off, keeping the place in a book or podcast.
+
 ## 0.6.0 — 2026-10-23
 
 ### Changed
