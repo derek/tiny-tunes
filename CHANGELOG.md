@@ -6,6 +6,18 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.6.3 — 2026-10-23
+
+### Changed
+- Only the middle touch button does something by itself: Home. The left and right
+  ones only count held together (3 s, the grown-ups screen).
+- A green now-playing bar is back along the bottom of Home, the albums and the song
+  list: what's playing (or paused); tap it for the player.
+- The player has a round back button (to the song list) and a progress bar along
+  the bottom again (it only shows how far along; no seeking).
+- Home is a list of wide cards, top to bottom: Podcasts, Music, Books.
+- Album names on the cards are all one font size (long ones wrap onto more lines).
+
 ## 0.6.2 — 2026-10-23
 
 ### Changed
