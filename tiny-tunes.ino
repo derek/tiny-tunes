@@ -279,6 +279,7 @@ static uint8_t volume = 0;      // actual output volume 0..255
 static int volLevel = 6;        // what the kid sees: 0..10
 static int maxVolPct = 70;      // grown-up volume limit, percent
 static String title;
+static String artist;  // the playing song's artist (tag, or guessed from the names)
 static bool dirtyAll = true, dirtyNow = true;
 static volatile bool connectDirty = false;  // grown-ups screen needs redraw
 static Screen screen = Screen::Player;  // which screen is showing
@@ -329,6 +330,7 @@ static std::vector<ResumeEntry> loadResume(const String& albumPath);
 static void saveResume(const String& albumPath, const std::vector<ResumeEntry>& v);
 static void rescanKeepingPlace();
 static void setOwner(String name);
+static String guessArtist(int a, const String& path);
 
 // Everything runs in loop(), so slow work (a web request, drawing a new screen, listing
 // a big album) would starve the MP3 decoder; the SD card and the screen even share one
@@ -1485,7 +1487,7 @@ static void rescanKeepingPlace() {
     current = tracks.empty() ? -1 : std::min<int>(track, tracks.size() - 1);
     paused = true;
   }
-  if (current >= 0 && !file) title = trackTitle(tracks[current], a);
+  if (current >= 0 && !file) { title = trackTitle(tracks[current], a); artist = guessArtist(a, tracks[current]); }
   dirtyNow = true;
 }
 
@@ -1662,10 +1664,25 @@ static void saveResumePos(bool finished) {
 static uint32_t be32(const uint8_t* b) { return (uint32_t)b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3]; }
 static uint32_t synchsafe(const uint8_t* b) { return (b[0] & 0x7F) << 21 | (b[1] & 0x7F) << 14 | (b[2] & 0x7F) << 7 | (b[3] & 0x7F); }
 
-// Reads the ID3v2 title and leaves `f` at the start of the audio. ESP8266Audio's
-// AudioFileSourceID3 reads the entire tag a byte at a time, which took seconds on
-// songs with embedded cover art; this seeks past every frame except the title.
-static String readId3Title(AudioFileSourceSD* f) {
+// One ID3 text frame's value as UTF-8 (Latin-1 or UTF-8 frames; UTF-16 gives "").
+static String id3Text(const uint8_t* v, uint32_t size) {
+  String out;
+  if (v[0] == 0) {  // Latin-1 -> UTF-8
+    for (uint32_t i = 1; i < size && v[i]; i++) {
+      if (v[i] < 0x80) out += (char)v[i];
+      else { out += (char)(0xC0 | v[i] >> 6); out += (char)(0x80 | (v[i] & 0x3F)); }
+    }
+  } else if (v[0] == 3) {  // UTF-8
+    for (uint32_t i = 1; i < size && v[i]; i++) out += (char)v[i];
+  }
+  return out;
+}
+
+// Reads the ID3v2 title and artist and leaves `f` at the start of the audio.
+// ESP8266Audio's AudioFileSourceID3 reads the entire tag a byte at a time, which took
+// seconds on songs with embedded cover art; this seeks past every other frame.
+static String readId3Title(AudioFileSourceSD* f, String& artist) {
+  artist = "";
   uint8_t h[10];
   if (f->read(h, 10) != 10 || memcmp(h, "ID3", 3) || h[3] < 3 || h[3] > 4) {
     f->seek(0, SEEK_SET);
@@ -1674,22 +1691,15 @@ static String readId3Title(AudioFileSourceSD* f) {
   uint32_t tagEnd = 10 + synchsafe(h + 6) + ((h[5] & 0x10) ? 10 : 0);  // + footer
   String title;
   if (!(h[5] & 0xC0)) {  // skip frame parsing for unsynchronised tags / extended headers (rare)
-    for (uint32_t pos = 10; pos + 10 <= tagEnd && !title.length();) {
+    for (uint32_t pos = 10; pos + 10 <= tagEnd && !(title.length() && artist.length());) {
       uint8_t fh[10];
       if (f->read(fh, 10) != 10 || !fh[0]) break;  // end, or padding
       uint32_t size = h[3] == 4 ? synchsafe(fh + 4) : be32(fh + 4);
-      if (!memcmp(fh, "TIT2", 4) && size > 1 && size < 256) {
+      bool isTitle = !memcmp(fh, "TIT2", 4), isArtist = !memcmp(fh, "TPE1", 4);
+      if ((isTitle || isArtist) && size > 1 && size < 256) {
         uint8_t v[256];
         if (f->read(v, size) != size) break;
-        if (v[0] == 0) {  // Latin-1 -> UTF-8
-          for (uint32_t i = 1; i < size && v[i]; i++) {
-            if (v[i] < 0x80) title += (char)v[i];
-            else { title += (char)(0xC0 | v[i] >> 6); title += (char)(0x80 | (v[i] & 0x3F)); }
-          }
-        } else if (v[0] == 3) {  // UTF-8
-          v[size < 256 ? size : 255] = 0;
-          title = (const char*)v + 1;
-        }  // UTF-16 titles fall back to the filename
+        (isTitle ? title : artist) = id3Text(v, size);
       }
       pos += 10 + size;
       f->seek(pos, SEEK_SET);
@@ -1697,6 +1707,23 @@ static String readId3Title(AudioFileSourceSD* f) {
   }
   f->seek(tagEnd, SEEK_SET);
   return title;
+}
+
+// The artist when the song's tag doesn't say: the show for podcasts, "Artist - Album"
+// folder names, or "Artist - Title" file names.
+static String guessArtist(int a, const String& path) {
+  if (a < 0 || a >= (int)albums.size()) return "";
+  if (isPodcastAlbum(a)) return albums[a].name;
+  int p = albums[a].name.indexOf(" - ");
+  if (p > 0) return albums[a].name.substring(0, p);
+  if (albums[a].artistPrefixed == 1) {
+    String n = fileName(path);
+    if (n.length() > 4) n.remove(n.length() - 4);
+    String t = cleanTitle(n, true, false);
+    int q = t.indexOf(" - ");
+    if (q > 0) return t.substring(0, q);
+  }
+  return "";
 }
 
 static void stopPlayback() {
@@ -1740,12 +1767,15 @@ static void playTrack(int i) {
     if (++missing < (int)tracks.size()) { playTrack(i + 1); return; }
     missing = 0;
     paused = true;
-    title = trackTitle(tracks[i], playAlbum);
+    title = trackTitle(tracks[i], playAlbum); artist = guessArtist(playAlbum, tracks[i]);
     dirtyNow = true;
     return;
   }
   missing = 0;
-  String tagTitle = readId3Title(file);
+  String tagArtist;
+  String tagTitle = readId3Title(file, tagArtist);
+  artist = tagArtist.length() ? asciiFold(tagArtist) : guessArtist(playAlbum, tracks[i]);
+  artist.trim();
   trackAudioStart = file->getPos();
   trackKbps = readMp3Kbps(file);
   title = tagTitle.length() ? cleanTitle(tagTitle, false, false) : trackTitle(tracks[i], playAlbum);
@@ -2060,11 +2090,12 @@ static uint16_t albumTint(int a) {
 static constexpr int NAV_H = 36;
 // The tall album card, the same size and height on the album picker and the song list.
 static constexpr int CARD_X = 12, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 172;
-// Player: "Song 3 of 12", the title, the play button (books and podcasts: back 15 s /
+// Player: "Song 3 of 12" (books and podcasts: and the minutes left), the title, the
+// artist, the play button (books and podcasts: back 15 s /
 // ahead 30 s on either side of it), a progress bar along the bottom. Swipe for the next /
 // previous song.
 static constexpr int P_COL_X = 12, P_COL_CX = 160, P_COL_W = 296;
-static constexpr int P_SUB_Y = 52, P_TITLE_CY = 86, P_TITLE_H = 48, P_LEFT_Y = 118, P_CTRL_Y = 166;
+static constexpr int P_SUB_Y = 52, P_TITLE_CY = 82, P_TITLE_H = 44, P_ARTIST_Y = 115, P_CTRL_Y = 166;
 static constexpr RoundButton B_PLAY{160, 36}, S_PLAY{160, 34}, S_BACK{76, 28}, S_FWD{244, 28};
 static constexpr int VB_X = 244, VB_Y = 5, VB_W = 68, VB_H = 26;  // the volume button (in the top bar)
 static constexpr int PB_X = 22, PB_Y = 216, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
@@ -2425,22 +2456,26 @@ static void handleVolume(const m5::touch_detail_t& t) {
 // ----- player -----
 static bool storyMode() { return isResumable(playAlbum); }
 
-// "12 min left" in this chapter or episode, from the file size and its bitrate.
+// "Song 3 of 12"; for books and podcasts "Chapter 3 of 22 - 12 min left", the minutes
+// from the file size and its bitrate.
 static void drawTimeLeft(bool force) {
   static String shown;
-  String s;
-  if (file && file->getSize() > file->getPos()) {
+  ShelfKind kind = albumKind(playAlbum);
+  const char* noun = kind == ShelfKind::Books ? "Chapter " : kind == ShelfKind::Podcasts ? "Episode " : "Song ";
+  String s = String(noun) + String(current + 1) + " of " + String(tracks.size());
+  if (storyMode() && file && file->getSize() > file->getPos()) {
     uint32_t sec = (uint64_t)(file->getSize() - file->getPos()) * 8 / (trackKbps * 1000);
-    s = sec < 60 ? String("Almost done") : String((sec + 30) / 60) + " min left";
+    s += sec < 60 ? String(" - almost done") : " - " + String((sec + 30) / 60) + " min left";
   }
   if (s == shown && !force) return;
   shown = s;
   auto& d = M5.Display;
-  d.fillRect(P_COL_X, P_LEFT_Y - 9, P_COL_W, 18, C_BG);
+  d.fillRect(0, P_SUB_Y - 9, VB_X - 4, 18, C_BG);
+  d.fillRect(0, NAV_H, 320, P_SUB_Y - 9 - NAV_H, C_BG);
   d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextDatum(middle_center);
-  d.setTextColor(rgb(200, 205, 230));
-  d.drawString(s, P_COL_CX, P_LEFT_Y);
+  d.setTextColor(C_DIM);
+  d.drawString(fitLine(s, 296), P_COL_CX, P_SUB_Y);
 }
 
 static void drawPlayButton(const RoundButton& b) {
@@ -2471,22 +2506,21 @@ static void drawControls() {
   }
 }
 
-// The top bar, "Song 3 of 12" (or chapter / episode), the title, and how long is left
-// for books and podcasts.
+// The top bar, "Song 3 of 12" (books and podcasts: and how long is left), the title, and
+// the artist.
 static void drawNavBar(int level);
 static void drawPlayerInfo() {
   auto& d = M5.Display;
   d.fillRect(0, 0, 320, P_CTRL_Y - B_PLAY.r - 3, C_BG);
   drawNavBar(3);
-  bool story = storyMode();
-  ShelfKind kind = albumKind(playAlbum);
-  const char* noun = kind == ShelfKind::Books ? "Chapter " : kind == ShelfKind::Podcasts ? "Episode " : "Song ";
-  d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextDatum(middle_center);
-  d.setTextColor(C_DIM);
-  d.drawString(String(noun) + String(current + 1) + " of " + String(tracks.size()), P_COL_CX, P_SUB_Y);
+  drawTimeLeft(true);
   drawTitle(title, P_COL_CX, P_TITLE_CY, P_COL_W - 4, P_TITLE_H, C_WHITE);
-  if (story) drawTimeLeft(true);
+  if (artist.length()) {
+    d.setFont(&fonts::FreeSansBold9pt7b);
+    d.setTextDatum(middle_center);
+    d.setTextColor(rgb(200, 205, 230));
+    d.drawString(fitLine(artist, P_COL_W - 8), P_COL_CX, P_ARTIST_Y);
+  }
 }
 
 // How far into the song (or chapter, or episode), with a knob to drag.
@@ -2682,9 +2716,10 @@ static void drawAlbums() {
 }
 
 // ----- the top bar -----
-// A round back button on the left (up one level; not on Home or the albums, where Home
-// is the way back), then where you are, a little picture and its name, and the volume
-// button on the right. Same height and place on every screen.
+// Just pictures, no words: a round back button on the left (up one level) on the songs
+// and the player; Home's house or the shelf's picture there on the others (Home is the
+// way back from those). On the right the now-playing button, or the volume on the
+// player. Same height and place on every screen.
 static constexpr int NB_X = 24, NB_R = 15, NB_TAP_W = 62, NAV_CY = NAV_H / 2;
 
 static void drawHouse(int cx, int cy, uint16_t c, uint16_t bg) {
@@ -2721,28 +2756,14 @@ static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's
   auto& d = M5.Display;
   uint16_t bar = rgb(14, 17, 40);
   d.fillRect(0, 0, 320, NAV_H, bar);
-  int x = 14;
-  if (level >= 2) {
+  if (level >= 2) {  // the songs and the player: back
     drawRound(NB_X, NAV_CY - 1, NB_R, C_OFF);
     iconArrow(NB_X - 1, NAV_CY - 1, 0, C_WHITE);
-    x = NB_X + NB_R + 12;
+  } else if (level == 0) {
+    drawHouse(NB_X, NAV_CY, C_WHITE, bar);
+  } else if (viewShelf >= 0 && viewShelf < (int)shelves.size()) {
+    drawShelfIcon(shelves[viewShelf].kind, NB_X + 2, NAV_CY + 1, C_WHITE, bar, 34);
   }
-  int shelf = level == 1 ? viewShelf : -1;
-  int album = level == 2 ? viewAlbum : level == 3 ? playAlbum : -1;
-  String label;
-  if (level == 0) { drawHouse(x + 9, NAV_CY, C_WHITE, bar); label = "Home"; }
-  else if (level == 1 && shelf >= 0 && shelf < (int)shelves.size()) {
-    drawShelfIcon(shelves[shelf].kind, x + 10, NAV_CY + 1, C_WHITE, bar, 34);
-    label = shelves[shelf].name;
-  } else if (album >= 0) {  // the album's cover, small
-    if (M5Canvas* cv = getCover(album, 22)) cv->pushSprite(&d, x, NAV_CY - 11, COVER_KEY);
-    else d.fillRoundRect(x, NAV_CY - 11, 22, 22, 4, albumTint(album));
-    label = albums[album].name;
-  }
-  d.setFont(&fonts::FreeSansBold12pt7b);
-  d.setTextDatum(middle_left);
-  d.setTextColor(C_WHITE);
-  d.drawString(fitLine(label, VB_X - x - 34), x + 30, NAV_CY + 1);
   if (level == 3) drawVolumeButton();  // the player: volume
   else drawNowPlayingButton();         // elsewhere: what's playing
 }
@@ -3879,7 +3900,7 @@ void setup() {
     tracks = listTracks(resumeAlbum);
     if (!tracks.empty()) {
       current = std::min<int>(resumeTrack, tracks.size() - 1);
-      title = trackTitle(tracks[current], playAlbum);
+      title = trackTitle(tracks[current], playAlbum); artist = guessArtist(playAlbum, tracks[current]);
       paused = true;  // togglePause() starts it
     }
   }

@@ -6,6 +6,15 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.7.5 — 2026-10-24
+
+### Changed
+- The top bar is pictures only: no names or album art. Home shows the house, the album
+  picker the shelf's picture, and the song list and player the back button.
+- The player shows the artist under the title: from the song's tag, else from an
+  "Artist - Album" folder or "Artist - Title" file names (podcasts: the show). Books and
+  podcasts show the minutes left next to "Chapter 3 of 22".
+
 ## 0.7.4 — 2026-10-23
 
 ### Changed
