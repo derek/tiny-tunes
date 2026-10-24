@@ -16,8 +16,8 @@
 //   The middle touch button below the screen: Home (the left and right ones do nothing alone)
 //   Home: shelves (Podcasts, Music, Books) as a list -> albums as tall cards -> songs
 //   The top bar: back and the shelf's name; top right, the player (green while playing)
-//   Player: the title, the artist, a big play button with the volume button (5 steps)
-//     beside it, and a progress bar to drag
+//   Player: the title, the artist, quieter / play / louder (5 volume steps, shown under
+//     play), and a progress bar to drag
 //   Albums page sideways; lists scroll up/down; on the player, swipe for next / previous song
 //   Snackbars at the bottom: low battery, charging, headphones on/off
 //   Hold two of the touch buttons for 3 s: grown-ups screen
@@ -2053,8 +2053,8 @@ static void prepareCovers() {
 // Shelves:  Podcasts, Music, Books (and any other shelf) as a list of wide cards.
 // Albums:   tall cards, 3 at a time, paging sideways.
 // Songs:    the album's tall card on the left (it slides over), the songs beside it.
-// Player:   the title, the artist, a big play button with the volume button (5 steps)
-//           beside it, and a seekable progress bar. Swipe for the next / previous song.
+// Player:   the title, the artist, quieter / play / louder (5 steps, shown under play),
+//           and a seekable progress bar. Swipe for the next / previous song.
 // Snackbars pop up at the bottom for the battery and headphones.
 
 static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return M5.Display.color565(r, g, b); }
@@ -2089,15 +2089,16 @@ static uint16_t albumTint(int a) {
 static constexpr int NAV_H = 36;
 // The tall album card, the same size and height on the album picker and the song list.
 static constexpr int CARD_X = 12, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 172;
-// Player: (books and podcasts: the minutes left), the title, the artist, the play button
-// with the volume button to its right, a progress bar along the bottom (drag to seek).
+// Player: (books and podcasts: the minutes left), the title, the artist, quieter / play /
+// louder with the volume level under play, a progress bar along the bottom (drag to seek).
 // Swipe for the next / previous song.
 static constexpr int P_COL_X = 12, P_COL_CX = 160, P_COL_W = 296;
-static constexpr int P_SUB_Y = 52, P_TITLE_CY = 82, P_TITLE_H = 44, P_ARTIST_Y = 115, P_CTRL_Y = 166;
+static constexpr int P_SUB_Y = 52, P_TITLE_CY = 82, P_TITLE_H = 44, P_ARTIST_Y = 113, P_CTRL_Y = 160;
 static constexpr RoundButton B_PLAY{160, 36};
 static constexpr int VB_X = 244, VB_Y = 5, VB_W = 68, VB_H = 26;  // the top bar's now-playing button
-static constexpr int VOL_X = 214, VOL_W = 88, VOL_H = 44, VOL_Y = P_CTRL_Y - VOL_H / 2;  // volume, right of play
-static constexpr int PB_X = 22, PB_Y = 216, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
+static constexpr RoundButton B_QUIET{78, 24}, B_LOUD{242, 24};  // volume down / up, either side of play
+static constexpr int VOL_DOTS_Y = 206;                           // the level, 5 dashes under play
+static constexpr int PB_X = 22, PB_Y = 220, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
 
 static uint32_t lastTouchMs = 0;
 static bool dimmed = false;
@@ -2365,68 +2366,35 @@ static void drawAlbumCard(int a, int x, int y, int w, int h) {
 static bool haveNowPlaying() { return current >= 0 && !tracks.empty(); }
 
 // ----- volume -----
-// The volume button on the player shows the level as 5 little bars; tapping it opens 5
-// big bars to pick from (each a whole column to hit). The top step is the grown-ups'
-// limit. Picking closes the panel; so does a tap outside it, or 5 s without a tap.
-static uint32_t volPanelUntil = 0;  // panel open until
-static constexpr int VL_X = 10, VL_Y = 28, VL_W = 300, VL_H = 184, VL_COL_X0 = 24, VL_STEP = 56, VL_COL_W = 52;
-static constexpr int VL_COL_Y = VL_Y + 34, VL_BASE = VL_Y + VL_H - 14;
-
+// On the player: a quieter button left of play and a louder one right of it, one step
+// a tap, with the level as 5 dashes under play. The top step is the grown-ups' limit.
 static int volStep() { return (volLevel + 1) / 2; }  // 0..5 from volLevel's 0..10
 
-static void drawVolumeButton() {  // on the player, right of the play button
+// A speaker with `waves` sound waves (0 quieter, 2 louder), centered on x, y.
+static void iconSpeakerWaves(int x, int y, int waves, uint16_t c) {
   auto& d = M5.Display;
-  d.fillRoundRect(VOL_X, VOL_Y, VOL_W, VOL_H, VOL_H / 2, C_OFF);
-  int cy = VOL_Y + VOL_H / 2;
-  iconSpeaker(VOL_X + 22, cy, C_WHITE);
-  for (int i = 0; i < 5; i++) {
-    int bh = 6 + i * 4;
-    d.fillRoundRect(VOL_X + 38 + i * 9, cy + 11 - bh, 6, bh, 2, i < volStep() ? C_YELLOW : rgb(74, 81, 128));
+  int sx = x - (waves ? 6 : 2);
+  d.fillRect(sx - 9, y - 5, 7, 11, c);
+  d.fillTriangle(sx - 4, y, sx + 6, y - 11, sx + 6, y + 11, c);
+  d.fillRect(sx - 4, y - 5, 6, 11, c);
+  for (int k = 1; k <= waves; k++) {  // the waves: arcs on the right, either side of 3 o'clock
+    d.fillArc(sx + 6, y, 4 + k * 5, 2 + k * 5, 300, 360, c);
+    d.fillArc(sx + 6, y, 4 + k * 5, 2 + k * 5, 0, 60, c);
   }
 }
 
-static void drawVolumeLevels() {
+static void drawVolumeDots() {
   auto& d = M5.Display;
-  for (int i = 0; i < 5; i++) {
-    int x = VL_COL_X0 + i * VL_STEP, bh = 34 + i * 24;
-    bool here = i == volStep() - 1;
-    d.fillRoundRect(x, VL_COL_Y, VL_COL_W, VL_BASE + 8 - VL_COL_Y, 12, here ? rgb(58, 65, 112) : C_PANEL);
-    d.fillRoundRect(x + 8, VL_BASE - bh, 36, bh, 10, i < volStep() ? C_YELLOW : C_OFF);
-  }
+  d.fillRect(100, VOL_DOTS_Y - 4, 120, 10, C_BG);
+  for (int i = 0; i < 5; i++) d.fillRoundRect(118 + i * 18, VOL_DOTS_Y - 2, 14, 5, 2, i < volStep() ? C_YELLOW : rgb(74, 81, 128));
 }
 
-static void openVolume() {
-  auto& d = M5.Display;
-  volPanelUntil = millis() + 5000;
-  d.fillRoundRect(VL_X, VL_Y, VL_W, VL_H, 18, C_PANEL);
-  d.drawRoundRect(VL_X, VL_Y, VL_W, VL_H, 18, C_OFF);
-  iconSpeaker(VL_X + 26, VL_Y + 18, C_WHITE);
-  d.setFont(&fonts::FreeSansBold12pt7b);
-  d.setTextDatum(middle_left);
-  d.setTextColor(C_WHITE);
-  d.drawString("Volume", VL_X + 42, VL_Y + 19);
-  drawVolumeLevels();
-}
-
-static void closeVolume() {
-  volPanelUntil = 0;
-  dirtyAll = true;  // repaint whatever was underneath
-}
-
-static void handleVolume(const m5::touch_detail_t& t) {
-  if (!t.wasClicked()) return;
-  for (int i = 0; i < 5; i++) {
-    int x = VL_COL_X0 + i * VL_STEP;
-    if (t.x < x - 2 || t.x >= x + VL_COL_W + 2 || t.y < VL_COL_Y - 24 || t.y >= VL_Y + VL_H) continue;
-    buzz();
-    setVolLevel((i + 1) * 2);
-    prefs.putUChar("lvl", volLevel);
-    drawVolumeLevels();
-    if (!btConnected && !musicIsPlaying()) M5.Speaker.tone(660, 150, 1, true);  // so they hear how loud
-    volPanelUntil = millis() + 700;  // a moment to see the pick, then close
-    return;
-  }
-  if (t.x < VL_X || t.x >= VL_X + VL_W || t.y < VL_Y || t.y >= VL_Y + VL_H) closeVolume();  // tapped outside
+static void changeVolume(int by) {
+  int step = constrain(volStep() + by, 1, 5);  // never all the way off: that just looks broken
+  setVolLevel(step * 2);
+  prefs.putUChar("lvl", volLevel);
+  drawVolumeDots();
+  if (!btConnected && !musicIsPlaying()) M5.Speaker.tone(660, 120, 1, true);  // so they hear how loud
 }
 
 // ----- player -----
@@ -2459,9 +2427,13 @@ static void drawPlayButton(const RoundButton& b) {
 }
 
 static void drawControls() {
-  M5.Display.fillRect(0, P_CTRL_Y - B_PLAY.r - 3, 320, B_PLAY.r * 2 + 10, C_BG);
+  M5.Display.fillRect(0, P_CTRL_Y - B_PLAY.r - 3, 320, B_PLAY.r * 2 + 6, C_BG);
+  drawRound(B_QUIET.x, P_CTRL_Y, B_QUIET.r, C_OFF);
+  iconSpeakerWaves(B_QUIET.x, P_CTRL_Y, 0, C_WHITE);
   drawPlayButton(B_PLAY);
-  drawVolumeButton();
+  drawRound(B_LOUD.x, P_CTRL_Y, B_LOUD.r, C_OFF);
+  iconSpeakerWaves(B_LOUD.x, P_CTRL_Y, 2, C_WHITE);
+  drawVolumeDots();
 }
 
 // The top bar, how long is left (books and podcasts), the title, and the artist.
@@ -2569,7 +2541,7 @@ static void drawSnack() {
 static void serviceSnack() {
   uint32_t now = millis();
   if (snackUp() && (int32_t)(now - snackUntil) >= 0) { snackShown = Snack::None; dirtyAll = true; }
-  if (snackPending == Snack::None || snackUp() || dimmed || volPanelUntil || screen == Screen::Grownups) return;
+  if (snackPending == Snack::None || snackUp() || dimmed || screen == Screen::Grownups) return;
   if (now - snackPendingAt > 60000) { snackPending = Snack::None; return; }  // old news
   snackShown = snackPending;
   snackPending = Snack::None;
@@ -3311,7 +3283,6 @@ static void showScreen(Screen s) {
 
 static void redraw() {
   if (screenOff) return;  // repaints when it's turned back on
-  if (volPanelUntil) return;  // the volume panel is up; everything repaints when it closes
   bool drew = false;
   if (dirtyAll) {
     dirtyAll = false;
@@ -3381,7 +3352,8 @@ static void handlePlayer(const m5::touch_detail_t& t) {
   if (flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }  // swipe left = next song, right = previous
   if (!t.wasClicked()) return;
   if (hit(B_PLAY, P_CTRL_Y, t.x, t.y)) { buzz(); togglePause(); }
-  else if (t.x >= VOL_X - 8 && t.y >= VOL_Y - 10 && t.y < VOL_Y + VOL_H + 10) { buzz(); openVolume(); }
+  else if (hit(B_QUIET, P_CTRL_Y, t.x, t.y)) { buzz(); changeVolume(-1); }
+  else if (hit(B_LOUD, P_CTRL_Y, t.x, t.y)) { buzz(); changeVolume(1); }
 }
 
 static void handleAlbums(const m5::touch_detail_t& t) {
@@ -3447,7 +3419,6 @@ static void handleInput() {
     buzz();
     screenOff = !screenOff;
     if (screenOff) {
-      volPanelUntil = 0;
       dimmed = true;  // nothing redraws or pops up meanwhile
       M5.Display.setBrightness(0);
       M5.Display.sleep();
@@ -3494,7 +3465,6 @@ static void handleInput() {
     if (held >= HOLD_MS) {
       buzz();
       holdStart = 0;
-      volPanelUntil = 0;
       snackShown = Snack::None;
       guTab = 0;
       statsPage = 0;
@@ -3507,14 +3477,12 @@ static void handleInput() {
 
   // the middle button: Home (the left and right ones only count held together, above)
   if (!afterChord && !chord && M5.BtnB.wasClicked()) {
-    if (volPanelUntil) volPanelUntil = 0;
     if (snackUp()) snackUntil = millis();
-    dirtyAll = true;  // repaint even if it stays on the same screen (the panel or a snackbar was up)
+    dirtyAll = true;  // repaint even if it stays on the same screen (a snackbar was up)
     goHome();
     return;
   }
 
-  if (volPanelUntil) { handleVolume(t); return; }  // the volume panel takes the taps while it's open
   if (snackUp() && t.wasClicked()) { snackUntil = millis(); return; }  // a tap only dismisses the snackbar
   if (screen != Screen::Grownups && handleNavBar(t)) return;  // the top bar
 
@@ -3896,7 +3864,6 @@ void loop() {
 
   handleInput();
   buzzService();
-  if (volPanelUntil && (int32_t)(millis() - volPanelUntil) >= 0) closeVolume();
   nightlyCheck();
   trackListening();
   watchPower();
@@ -3909,11 +3876,11 @@ void loop() {
   static uint32_t lastTick = 0, lastBounce = 0;
   uint32_t now = millis();
   bool library = screen != Screen::Grownups;
-  if (library && musicIsPlaying() && !dimmed && !volPanelUntil && now - lastBounce > 150) {
+  if (library && musicIsPlaying() && !dimmed && now - lastBounce > 150) {
     lastBounce = now;
     drawNowPlayingButton(true);  // the green button's bars dance while music plays
   }
-  if (screen == Screen::Player && !dimmed && !volPanelUntil && !tracks.empty() && now - lastTick > 1000) {
+  if (screen == Screen::Player && !dimmed && !tracks.empty() && now - lastTick > 1000) {
     lastTick = now;
     if (!snackUp()) drawPlayProgress();  // the snackbar sits over it
     if (storyMode()) drawTimeLeft(false);  // books and podcasts: minutes left

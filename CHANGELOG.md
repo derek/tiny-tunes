@@ -6,6 +6,12 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.8.2 — 2026-10-24
+
+### Changed
+- Player volume: a quieter button left of play and a louder one right of it, one step
+  per tap, with the level as five dashes under play. The volume panel is gone.
+
 ## 0.8.1 — 2026-10-24
 
 ### Changed
