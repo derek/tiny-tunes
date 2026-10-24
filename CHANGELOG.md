@@ -6,6 +6,21 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.7.0 — 2026-10-23
+
+### Changed
+- A top bar on every screen, the same height and place: picture breadcrumbs (a house
+  for Home, then the shelf, the album and the song, the current one lit green with its
+  name; tap one to go there) and the volume button, so volume works from anywhere.
+- The album card is the same size and height on the album picker and the song list,
+  so it only slides sideways; album page dots are below the cards.
+- The player loses its "< album" line and big volume button (the top bar has both).
+- Going back is the top bar: the song list no longer goes back on a sideways swipe.
+
+### Fixed
+- The buzz for tapping an album lasted as long as the card's slide; every tap now
+  buzzes the same short pulse.
+
 ## 0.6.5 — 2026-10-23
 
 ### Changed
