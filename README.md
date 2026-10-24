@@ -7,12 +7,12 @@ chosen by a grown-up.
 
 The middle touch button below the screen is **Home**. Every screen has the same top bar:
 pictures only: a round back button (on the song list and the player), and top right a
-button that's green while music plays and opens the player (where it's the volume).
+button that's green while music plays and opens the player.
 Home is the shelves (Podcasts, Music, Books)
 as a list of wide cards; then albums as tall cards, three at a time; then the songs.
 The player keeps it simple: the album, the title, one big play button (swipe for the next
 or previous song), a progress bar, and a volume button with 5 steps.
-Books and podcasts skip 15 s back / 30 s ahead and resume where they stopped.
+Books and podcasts resume where they stopped.
 Snackbars at the bottom say when the battery is low, it's charging, or headphones connect.
 
 A quick tap on the power button turns the screen off (the music keeps playing) and on

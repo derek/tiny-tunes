@@ -6,6 +6,13 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.8.1 — 2026-10-24
+
+### Changed
+- The player keeps the now-playing button at the top right, like every other screen;
+  the volume button moves to the right of the play button.
+- Books and podcasts drop the back 15 s / ahead 30 s buttons (the progress bar seeks).
+
 ## 0.8.0 — 2026-10-24
 
 ### Changed

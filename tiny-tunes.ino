@@ -15,9 +15,9 @@
 // Kid-friendly controls:
 //   The middle touch button below the screen: Home (the left and right ones do nothing alone)
 //   Home: shelves (Podcasts, Music, Books) as a list -> albums as tall cards -> songs
-//   The button top right goes to the player (green while playing); there it's the volume
-//   Player: "< album" (tap it to go back), the title, a big play button (books and
-//     podcasts: back 15 s / ahead 30 s too), a progress bar, the volume button (5 steps)
+//   The top bar: back and the shelf's name; top right, the player (green while playing)
+//   Player: the title, the artist, a big play button with the volume button (5 steps)
+//     beside it, and a progress bar to drag
 //   Albums page sideways; lists scroll up/down; on the player, swipe for next / previous song
 //   Snackbars at the bottom: low battery, charging, headphones on/off
 //   Hold two of the touch buttons for 3 s: grown-ups screen
@@ -2053,9 +2053,8 @@ static void prepareCovers() {
 // Shelves:  Podcasts, Music, Books (and any other shelf) as a list of wide cards.
 // Albums:   tall cards, 3 at a time, paging sideways.
 // Songs:    the album's tall card on the left (it slides over), the songs beside it.
-// Player:   "< album" (tap to go back), the title, a big play button, a progress bar,
-//           and the volume button (5 steps). Swipe for the next / previous song. Books and
-//           podcasts also skip 15 s back / 30 s ahead.
+// Player:   the title, the artist, a big play button with the volume button (5 steps)
+//           beside it, and a seekable progress bar. Swipe for the next / previous song.
 // Snackbars pop up at the bottom for the battery and headphones.
 
 static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return M5.Display.color565(r, g, b); }
@@ -2090,13 +2089,14 @@ static uint16_t albumTint(int a) {
 static constexpr int NAV_H = 36;
 // The tall album card, the same size and height on the album picker and the song list.
 static constexpr int CARD_X = 12, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 172;
-// Player: (books and podcasts: the minutes left), the title, the artist, the play button (books and podcasts: back 15 s /
-// ahead 30 s on either side of it), a progress bar along the bottom. Swipe for the next /
-// previous song.
+// Player: (books and podcasts: the minutes left), the title, the artist, the play button
+// with the volume button to its right, a progress bar along the bottom (drag to seek).
+// Swipe for the next / previous song.
 static constexpr int P_COL_X = 12, P_COL_CX = 160, P_COL_W = 296;
 static constexpr int P_SUB_Y = 52, P_TITLE_CY = 82, P_TITLE_H = 44, P_ARTIST_Y = 115, P_CTRL_Y = 166;
-static constexpr RoundButton B_PLAY{160, 36}, S_PLAY{160, 34}, S_BACK{76, 28}, S_FWD{244, 28};
-static constexpr int VB_X = 244, VB_Y = 5, VB_W = 68, VB_H = 26;  // the volume button (in the top bar)
+static constexpr RoundButton B_PLAY{160, 36};
+static constexpr int VB_X = 244, VB_Y = 5, VB_W = 68, VB_H = 26;  // the top bar's now-playing button
+static constexpr int VOL_X = 214, VOL_W = 88, VOL_H = 44, VOL_Y = P_CTRL_Y - VOL_H / 2;  // volume, right of play
 static constexpr int PB_X = 22, PB_Y = 216, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
 
 static uint32_t lastTouchMs = 0;
@@ -2374,15 +2374,14 @@ static constexpr int VL_COL_Y = VL_Y + 34, VL_BASE = VL_Y + VL_H - 14;
 
 static int volStep() { return (volLevel + 1) / 2; }  // 0..5 from volLevel's 0..10
 
-static void drawVolumeButton() {
+static void drawVolumeButton() {  // on the player, right of the play button
   auto& d = M5.Display;
-  d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, VB_H / 2, C_OFF);
-  int cy = VB_Y + VB_H / 2;
-  d.fillRect(VB_X + 10, cy - 4, 5, 8, C_WHITE);  // a little speaker
-  d.fillTriangle(VB_X + 12, cy, VB_X + 20, cy - 8, VB_X + 20, cy + 8, C_WHITE);
+  d.fillRoundRect(VOL_X, VOL_Y, VOL_W, VOL_H, VOL_H / 2, C_OFF);
+  int cy = VOL_Y + VOL_H / 2;
+  iconSpeaker(VOL_X + 22, cy, C_WHITE);
   for (int i = 0; i < 5; i++) {
-    int bh = 4 + i * 2;
-    d.fillRect(VB_X + 27 + i * 7, cy + 7 - bh, 5, bh, i < volStep() ? C_YELLOW : rgb(74, 81, 128));
+    int bh = 6 + i * 4;
+    d.fillRoundRect(VOL_X + 38 + i * 9, cy + 11 - bh, 6, bh, 2, i < volStep() ? C_YELLOW : rgb(74, 81, 128));
   }
 }
 
@@ -2459,26 +2458,10 @@ static void drawPlayButton(const RoundButton& b) {
   else iconPause(b.x, P_CTRL_Y, b.r * 8 / 10, C_WHITE);
 }
 
-// Back 15 s / ahead 30 s: a little rewind or fast-forward mark over the seconds.
-static void drawSkipSecButton(const RoundButton& b, bool fwd, int secs) {
-  auto& d = M5.Display;
-  drawRound(b.x, P_CTRL_Y, b.r, C_BLUE);
-  iconSkip(b.x, P_CTRL_Y - 8, 14, fwd, C_WHITE);
-  d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextDatum(middle_center);
-  d.setTextColor(C_WHITE);
-  d.drawString(String(secs), b.x, P_CTRL_Y + 9);
-}
-
 static void drawControls() {
   M5.Display.fillRect(0, P_CTRL_Y - B_PLAY.r - 3, 320, B_PLAY.r * 2 + 10, C_BG);
-  if (storyMode()) {
-    drawSkipSecButton(S_BACK, false, 15);
-    drawSkipSecButton(S_FWD, true, 30);
-    drawPlayButton(S_PLAY);
-  } else {
-    drawPlayButton(B_PLAY);
-  }
+  drawPlayButton(B_PLAY);
+  drawVolumeButton();
 }
 
 // The top bar, how long is left (books and podcasts), the title, and the artist.
@@ -2540,15 +2523,6 @@ static void drawPlayer() {
   drawPlayProgress();
 }
 
-// Skips by seconds (books and podcasts), using the bitrate to turn seconds into bytes.
-static void skipSeconds(int secs) {
-  if (!file || current < 0) return;
-  int64_t pos = (int64_t)file->getPos() + (int64_t)secs * trackKbps * 125;
-  int64_t lo = trackAudioStart + 1, hi = (int64_t)file->getSize() - 16000;
-  forceStartPos = (uint32_t)std::max(lo, std::min(pos, std::max(lo, hi)));
-  recoverTries = 0;
-  playTrack(current);
-}
 
 // ----- snackbars -----
 // A bar at the bottom for a few seconds: low battery (at 20, 10 and 5%), charging, full,
@@ -2689,7 +2663,7 @@ static void drawAlbums() {
 
 // ----- the top bar -----
 // A round back button on the left (up one level; Home shows its house there instead) and
-// the shelf's name, and on the right the now-playing button, or the volume on the player.
+// the shelf's name, and on the right the now-playing button.
 // Same height and place on every screen.
 static constexpr int NB_X = 24, NB_R = 15, NB_TAP_W = 62, NAV_CY = NAV_H / 2;
 
@@ -2702,9 +2676,8 @@ static void drawHouse(int cx, int cy, uint16_t c, uint16_t bg) {
 
 static bool navHasBack() { return screen != Screen::Shelves; }
 
-// Top right on Home, the albums and the songs: three sound bars, bouncing on green while
-// something plays, still and grey when it's paused (or nothing is loaded). Tap it for
-// the player, which has the volume button in the same spot.
+// Top right on every screen: three sound bars, bouncing on green while something plays,
+// still and grey when it's paused (or nothing is loaded). Tap it for the player.
 static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random bar heights
   static uint8_t heights[3] = {9, 15, 12};
   static uint32_t seed = 88675123;  // xorshift; libc rand() costs IRAM
@@ -2719,7 +2692,7 @@ static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random b
 }
 
 // Back on the left (Home's house instead), the shelf's name, and top right the
-// now-playing button (the volume on the player).
+// now-playing button.
 static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's songs, 3 the player
   auto& d = M5.Display;
   uint16_t bar = rgb(14, 17, 40);
@@ -2738,17 +2711,15 @@ static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's
       d.drawString(fitLine(shelves[shelf].name, VB_X - NB_X - NB_R - 24), NB_X + NB_R + 12, NAV_CY + 1);
     }
   }
-  if (level == 3) drawVolumeButton();  // the player: volume
-  else drawNowPlayingButton();         // elsewhere: what's playing
+  drawNowPlayingButton();
 }
 
 // A tap in the top bar: back (player -> songs -> albums -> Home), or the right button.
 static void openTracks(int a);
 static bool handleNavBar(const m5::touch_detail_t& t) {
   if (!t.wasClicked() || t.y >= NAV_H + 6) return false;
-  if (t.x >= VB_X - 10) {
-    if (screen == Screen::Player) { buzz(); openVolume(); }
-    else if (haveNowPlaying()) { buzz(); showScreen(Screen::Player); }
+  if (t.x >= VB_X - 10) {  // the now-playing button (on the player: already there)
+    if (screen != Screen::Player && haveNowPlaying()) { buzz(); showScreen(Screen::Player); }
     return true;
   }
   if (t.x < NB_TAP_W && navHasBack()) {
@@ -3406,14 +3377,11 @@ static void handlePlayer(const m5::touch_detail_t& t) {
     seekTo((float)(seekX - PB_X) / PB_W);
     return;
   }
-  bool story = storyMode();
   int dir;
   if (flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }  // swipe left = next song, right = previous
   if (!t.wasClicked()) return;
-  if (!story) { if (hit(B_PLAY, P_CTRL_Y, t.x, t.y)) { buzz(); togglePause(); } return; }
-  if (hit(S_PLAY, P_CTRL_Y, t.x, t.y)) { buzz(); togglePause(); }
-  else if (hit(S_BACK, P_CTRL_Y, t.x, t.y)) { buzz(); skipSeconds(-15); }
-  else if (hit(S_FWD, P_CTRL_Y, t.x, t.y)) { buzz(); skipSeconds(30); }
+  if (hit(B_PLAY, P_CTRL_Y, t.x, t.y)) { buzz(); togglePause(); }
+  else if (t.x >= VOL_X - 8 && t.y >= VOL_Y - 10 && t.y < VOL_Y + VOL_H + 10) { buzz(); openVolume(); }
 }
 
 static void handleAlbums(const m5::touch_detail_t& t) {
@@ -3940,7 +3908,7 @@ void loop() {
 
   static uint32_t lastTick = 0, lastBounce = 0;
   uint32_t now = millis();
-  bool library = screen == Screen::Shelves || screen == Screen::Albums || screen == Screen::Tracks;
+  bool library = screen != Screen::Grownups;
   if (library && musicIsPlaying() && !dimmed && !volPanelUntil && now - lastBounce > 150) {
     lastBounce = now;
     drawNowPlayingButton(true);  // the green button's bars dance while music plays
