@@ -2064,10 +2064,10 @@ static constexpr int CARD_X = 12, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 172;
 // ahead 30 s on either side of it), a progress bar along the bottom. Swipe for the next /
 // previous song.
 static constexpr int P_COL_X = 12, P_COL_CX = 160, P_COL_W = 296;
-static constexpr int P_SUB_Y = 52, P_TITLE_CY = 91, P_TITLE_H = 54, P_LEFT_Y = 125, P_CTRL_Y = 172;
+static constexpr int P_SUB_Y = 52, P_TITLE_CY = 86, P_TITLE_H = 48, P_LEFT_Y = 118, P_CTRL_Y = 166;
 static constexpr RoundButton B_PLAY{160, 36}, S_PLAY{160, 34}, S_BACK{76, 28}, S_FWD{244, 28};
 static constexpr int VB_X = 244, VB_Y = 5, VB_W = 68, VB_H = 26;  // the volume button (in the top bar)
-static constexpr int PB_X = 16, PB_Y = 226, PB_W = 288, PB_H = 8;  // progress (just shows; no seeking)
+static constexpr int PB_X = 22, PB_Y = 216, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
 
 static uint32_t lastTouchMs = 0;
 static bool dimmed = false;
@@ -2489,13 +2489,33 @@ static void drawPlayerInfo() {
   if (story) drawTimeLeft(true);
 }
 
-// How far into the song (or chapter, or episode).
-static void drawPlayProgress() {
+// How far into the song (or chapter, or episode), with a knob to drag.
+static bool seekDragging = false;  // a finger is on the progress bar
+
+static void drawPlayProgressAt(int p) {  // p: the knob's offset into the bar, 0..PB_W
   auto& d = M5.Display;
-  uint32_t start = trackAudioStart, size = file ? file->getSize() : 0, pos = file ? file->getPos() : 0;
-  int w = size > start ? (int64_t)PB_W * (pos - std::min(pos, start)) / (size - start) : 0;
+  p = constrain(p, 0, PB_W);
+  d.fillRect(0, PB_Y - 9, 320, PB_H + 20, C_BG);
   d.fillRoundRect(PB_X, PB_Y, PB_W, PB_H, PB_H / 2, C_OFF);
-  if (w > 0) d.fillRoundRect(PB_X, PB_Y, std::max(w, PB_H), PB_H, PB_H / 2, albumTint(playAlbum));
+  if (p > 0) d.fillRoundRect(PB_X, PB_Y, std::max(p, PB_H), PB_H, PB_H / 2, albumTint(playAlbum));
+  d.fillCircle(PB_X + p, PB_Y + PB_H / 2, seekDragging ? 12 : 10, C_WHITE);
+}
+
+static void drawPlayProgress() {
+  if (seekDragging) return;  // the finger's preview wins
+  uint32_t start = trackAudioStart, size = file ? file->getSize() : 0, pos = file ? file->getPos() : 0;
+  drawPlayProgressAt(size > start ? (int64_t)PB_W * (pos - std::min(pos, start)) / (size - start) : 0);
+}
+
+// Jumps to `frac` (0..1) of the current song's audio, and plays.
+static void seekTo(float frac) {
+  if (current < 0 || tracks.empty()) return;
+  uint32_t size = file ? file->getSize() : fileSize(tracks[current]);
+  uint32_t start = file ? trackAudioStart : 0;
+  if (size <= start) return;
+  forceStartPos = std::max<uint32_t>(start + 1, start + (uint32_t)(constrain(frac, 0.0f, 0.995f) * (size - start)));
+  recoverTries = 0;
+  playTrack(current);
 }
 
 static void drawPlayer() {
@@ -2808,12 +2828,15 @@ static void handleShelves(const m5::touch_detail_t& t) {
 // ----- songs -----
 // The album's tall card on the left (it slides over from where it was on the album
 // picker), and its songs beside it, all in one font size (long titles wrap onto a second
-// line). Tap a song to play it (the list stays; tap the playing one to pause). Swipe
+// line). Tap a song to play it (the list stays; tap the playing one for its page). Swipe
 // up/down to scroll; the top bar goes back. Podcast episodes have a date badge.
 static constexpr int TC_X = CARD_X, TC_Y = CARD_Y, TC_H = 240 - CARD_Y - 8;  // the card: as on the album picker, down to the bottom
-static constexpr int TL_Y = CARD_Y, TL_X = TC_X + AL_CARD_W + 16, TL_W = 306 - TL_X;
-static int trRowH() { return 39; }
-static int trRows() { return 5; }
+// Podcasts have no card: the episodes take the whole width, in taller rows.
+static constexpr int TL_Y = CARD_Y;
+static int tlX() { return isPodcastAlbum(viewAlbum) ? 8 : TC_X + AL_CARD_W + 16; }
+static int tlW() { return 306 - tlX(); }
+static int trRowH() { return isPodcastAlbum(viewAlbum) ? 48 : 39; }
+static int trRows() { return isPodcastAlbum(viewAlbum) ? 4 : 5; }
 static int slideFromX = -1;  // set when a card was tapped on the album picker: slide it over
 
 static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown in the list
@@ -2868,19 +2891,19 @@ static void slideCard(int a, int fromX) {
 
 static void drawTracks() {
   auto& d = M5.Display;
-  if (slideFromX >= 0) {  // just picked: keep only that card, then move it over
+  bool podcast = isPodcastAlbum(viewAlbum);
+  if (slideFromX >= 0 && !podcast) {  // just picked: keep only that card, then move it over
     d.fillScreen(C_BG);
     drawNavBar(2);
     drawAlbumCard(viewAlbum, slideFromX, AL_CARD_Y, AL_CARD_W, AL_CARD_H);
     slideCard(viewAlbum, slideFromX);
-    slideFromX = -1;
   } else {
     d.fillScreen(C_BG);
     drawNavBar(2);
-    drawAlbumCard(viewAlbum, TC_X, TC_Y, AL_CARD_W, TC_H);
+    if (!podcast) drawAlbumCard(viewAlbum, TC_X, TC_Y, AL_CARD_W, TC_H);
   }
+  slideFromX = -1;
   uint16_t ac = albumTint(viewAlbum);
-  bool podcast = isPodcastAlbum(viewAlbum);
   int n = viewTracks.size();
   int rowH = trRowH(), rows = trRows();
   for (int r = 0; r < rows; r++) {
@@ -2889,34 +2912,34 @@ static void drawTracks() {
     int y = TL_Y + r * rowH, h = rowH - 4, my = y + h / 2;
     bool playing = viewAlbum == playAlbum && i == current;
     audioPump();
-    d.fillRoundRect(TL_X, y, TL_W, h, 10, playing ? ac : C_ROW);
+    d.fillRoundRect(tlX(), y, tlW(), h, 10, playing ? ac : C_ROW);
     if (podcast) {  // date badge + title wrapped over up to three lines
       String f = viewTracks[i].substring(viewTracks[i].lastIndexOf('/') + 1);
       static const char* MON[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
       int mon = f.length() > 10 && f[4] == '-' ? f.substring(5, 7).toInt() : 0;
-      d.fillRoundRect(TL_X + 4, y + 4, 40, h - 8, 8, playing ? C_WHITE : C_OFF);
+      d.fillRoundRect(tlX() + 4, y + 4, 40, h - 8, 8, playing ? C_WHITE : C_OFF);
       d.setTextDatum(middle_center);
       d.setTextColor(playing ? ac : C_WHITE);
       if (mon >= 1 && mon <= 12) {
         d.setFont(&fonts::DejaVu9);
-        d.drawString(MON[mon - 1], TL_X + 24, my - 6);
+        d.drawString(MON[mon - 1], tlX() + 24, my - 6);
         d.setFont(&fonts::FreeSansBold9pt7b);
-        d.drawString(String(f.substring(8, 10).toInt()), TL_X + 24, my + 6);
+        d.drawString(String(f.substring(8, 10).toInt()), tlX() + 24, my + 6);
       } else {
         d.setFont(&fonts::FreeSansBold12pt7b);
-        d.drawString(String(i + 1), TL_X + 24, my);
+        d.drawString(String(i + 1), tlX() + 24, my);
       }
       d.setFont(&fonts::DejaVu12);
-      int tx = TL_X + 54, tw = TL_W - 54 - 18;
-      auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
-      int lh = 14, ty = my - (int)(lines.size() - 1) * lh / 2;
+      int tx = tlX() + 54, tw = tlW() - 54 - 18;
+      auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 3);
+      int lh = 13, ty = my - (int)(lines.size() - 1) * lh / 2;
       d.setTextDatum(middle_left);
       d.setTextColor(C_WHITE);
       for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
-      drawProgressMark(i, tx, TL_X + TL_W - 8, y, h, playing);
+      drawProgressMark(i, tx, tlX() + tlW() - 8, y, h, playing);
       continue;
     }
-    int nx = TL_X + 17;
+    int nx = tlX() + 17;
     d.fillCircle(nx, my, 12, playing ? C_WHITE : C_OFF);
     if (playing) iconPlaying(nx, my, ac);
     else {
@@ -2925,14 +2948,14 @@ static void drawTracks() {
       d.setTextColor(C_WHITE);
       d.drawString(String(i + 1), nx, my);
     }
-    int tx = TL_X + 42, tw = TL_W - 42 - (isResumable(viewAlbum) ? 26 : 14);
+    int tx = tlX() + 42, tw = tlW() - 42 - (isResumable(viewAlbum) ? 26 : 14);
     d.setFont(&fonts::DejaVu12);  // one size for every title; long ones take two lines
     d.setTextDatum(middle_left);
     d.setTextColor(C_WHITE);
     auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
     int lh = 14, ty = my - (int)(lines.size() - 1) * lh / 2;
     for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
-    drawProgressMark(i, tx, TL_X + TL_W - 8, y, h, playing);
+    drawProgressMark(i, tx, tlX() + tlW() - 8, y, h, playing);
   }
   if (n > rows) {  // scroll bar
     int trackH = rows * rowH - 4, barH = std::max(16, trackH * rows / n);
@@ -3379,6 +3402,19 @@ static void navigate(int which) {
 
 static void handlePlayer(const m5::touch_detail_t& t) {
   if (tracks.empty()) return;
+  static int seekX = 0;
+  if (t.isPressed() && t.base_y >= PB_Y - 10) {  // finger on the progress bar: the knob follows it
+    seekDragging = true;
+    seekX = t.x;
+    drawPlayProgressAt(t.x - PB_X);
+    return;
+  }
+  if (seekDragging) {  // let go: jump there
+    seekDragging = false;
+    buzz();
+    seekTo((float)(seekX - PB_X) / PB_W);
+    return;
+  }
   bool story = storyMode();
   int dir;
   if (flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }  // swipe left = next song, right = previous
@@ -3415,12 +3451,12 @@ static void handleTracks(const m5::touch_detail_t& t) {
   };
   int dir;
   if (flickedY(t, dir)) { scroll(dir * (trRows() - 1)); return; }  // keep one row for context
-  if (!t.wasClicked() || t.x < TL_X - 4 || t.y < TL_Y - 4) return;  // the card itself does nothing
+  if (!t.wasClicked() || t.x < tlX() - 4 || t.y < TL_Y - 4) return;  // the card itself does nothing
   int r = (t.y - TL_Y) / trRowH(), i = tracksTop + r;
   if (r >= trRows() || i >= (int)viewTracks.size()) return;
-  buzz();  // play it and stay on the list (the now-playing button goes to the player)
-  if (viewAlbum == playAlbum && i == current) togglePause();  // the song that's on: pause / carry on
-  else playAlbumTrack(viewAlbum, i);
+  buzz();
+  if (viewAlbum == playAlbum && i == current) showScreen(Screen::Player);  // the song that's on: its page
+  else playAlbumTrack(viewAlbum, i);  // another one: play it and stay on the list
 }
 
 // Grown-ups: hold two of the three touch buttons together for 3 s. A yellow strip grows

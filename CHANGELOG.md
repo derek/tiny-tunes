@@ -6,6 +6,16 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.7.4 — 2026-10-23
+
+### Changed
+- Podcast episode lists drop the card: episodes take the whole width, with up to three
+  lines of title each.
+- Tapping the song that's already playing in a list opens its page (instead of
+  pausing it).
+- The player's progress bar is bigger, and seeking is back: drag the knob, or tap a
+  spot on the bar.
+
 ## 0.7.3 — 2026-10-23
 
 ### Changed
