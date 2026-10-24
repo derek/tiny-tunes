@@ -6,6 +6,23 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.6.5 — 2026-10-23
+
+### Changed
+- The album picker's page dots are at the top.
+- The song list has more room around each title (four rows above the now-playing bar).
+- The player no longer shows the album card: "< album" and "Song 3 of 12" sit at the
+  top left (tap the album to go back to its songs), then the title, the play button,
+  the volume button and the progress bar.
+- Tapping a song in the list plays it and stays on the list (tap the playing one to
+  pause or carry on); the now-playing bar goes to the player.
+
+### Fixed
+- Going back from the player to the song list (or any screen change while music
+  played) could take seconds, with the buzz motor running the whole time: the audio
+  code waited for room in the speaker's queue in the middle of drawing. It now only
+  hands the speaker audio when there's room, so nothing waits.
+
 ## 0.6.4 — 2026-10-23
 
 ### Changed

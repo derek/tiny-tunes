@@ -16,7 +16,7 @@
 //   The middle touch button below the screen: Home (the left and right ones do nothing alone)
 //   Home: shelves (Podcasts, Music, Books) as a list -> albums as tall cards -> songs
 //   A green now-playing bar at the bottom of those screens goes to the player
-//   Player: the album's card (tap it to go back), the title, a big play button (books and
+//   Player: "< album" (tap it to go back), the title, a big play button (books and
 //     podcasts: back 15 s / ahead 30 s too), a progress bar, the volume button (5 steps)
 //   Albums page sideways; lists scroll up/down; on the player, swipe for next / previous song
 //   Snackbars at the bottom: low battery, charging, headphones on/off
@@ -191,6 +191,15 @@ class AudioOutputRouter : public AudioOutput {
     return consumeSpeaker(s);
   }
   void flush() override { flushSpeaker(); }
+  // Can it take more audio without waiting? M5Unified's playRaw() blocks while the
+  // speaker's two queue slots are full, which would stall loop() (touch, drawing, the
+  // buzz motor's off switch) for up to a buffer's length.
+  bool hasRoom() {
+#if !CORE2_WIFI
+    if (btConnected) return ringFree() > 4096;
+#endif
+    return _spk->isPlaying(_ch) < 2;  // one decode pass hands over at most one buffer
+  }
   bool stop() override {
     flushSpeaker();
     _spk->stop(_ch);
@@ -326,7 +335,7 @@ static void setOwner(String name);
 // SPI bus. Slow code calls this between chunks of work to keep the music going.
 static void audioPump() {
   if (!mp3 || !mp3->isRunning() || paused) return;
-  for (int i = 0; i < 8 && mp3->loop(); i++) {}
+  for (int i = 0; i < 8 && out.hasRoom() && mp3->loop(); i++) {}
 }
 
 // The file that's playing (or loaded), or "".
@@ -2007,14 +2016,14 @@ static void prepareCovers() {
 // ================= kid-friendly UI =================
 // The middle touch button below the screen is Home; the other two only count held
 // together (3 s, the grown-ups screen). A green now-playing bar along the bottom of the
-// library screens goes to the player. Back: tap the player's album card, or swipe
+// library screens goes to the player. Back: tap "< album" on the player, or swipe
 // sideways on the song list.
 // Shelves:  Podcasts, Music, Books (and any other shelf) as a list of wide cards.
 // Albums:   tall cards, 3 at a time, paging sideways.
 // Songs:    the album's tall card on the left (it slides over), the songs beside it.
-// Player:   the album's tall card again (tap it to go back), the title, a big play
-//           button, a progress bar, and the volume button (5 steps). Swipe for the next /
-//           previous song. Books and podcasts also skip 15 s back / 30 s ahead.
+// Player:   "< album" (tap to go back), the title, a big play button, a progress bar,
+//           and the volume button (5 steps). Swipe for the next / previous song. Books and
+//           podcasts also skip 15 s back / 30 s ahead.
 // Snackbars pop up at the bottom for the battery and headphones.
 
 static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return M5.Display.color565(r, g, b); }
@@ -2044,17 +2053,18 @@ static uint16_t albumTint(int a) {
   return a >= 0 && a < (int)albums.size() && albums[a].tint ? albums[a].tint : albumColor(a);
 }
 
-// The tall album card, the same on the album picker, the song list and the player.
+// The tall album card, the same on the album picker and the song list.
 static constexpr int CARD_X = 8, CARD_Y = 8, CARD_W = 90, CARD_H = 176;
-// Player: the card on the left (tap it to go back); on the right "3 of 12", the volume
-// button, the title and the play button (books and podcasts: back 15 s / ahead 30 s on
-// either side of it); a progress bar along the bottom. Swipe for the next / previous song.
-static constexpr int P_COL_X = CARD_X + CARD_W + 16, P_COL_CX = (P_COL_X + 312) / 2, P_COL_W = 312 - P_COL_X;
-static constexpr int P_SUB_Y = 30, P_TITLE_CY = 90, P_TITLE_H = 64, P_LEFT_Y = 128, P_CTRL_Y = 168;
-static constexpr RoundButton B_PLAY{P_COL_CX, 34}, S_PLAY{P_COL_CX, 30}, S_BACK{P_COL_CX - 63, 24}, S_FWD{P_COL_CX + 63, 24};
+// Player: "< album" (tap it to go back) and "Song 3 of 12" at the top left, the volume
+// button top right, the title, the play button (books and podcasts: back 15 s / ahead
+// 30 s on either side of it), a progress bar along the bottom. Swipe for the next /
+// previous song.
+static constexpr int P_COL_X = 12, P_COL_CX = 160, P_COL_W = 296;
+static constexpr int P_ALBUM_Y = 21, P_SUB_Y = 41, P_TITLE_CY = 90, P_TITLE_H = 56, P_LEFT_Y = 124, P_CTRL_Y = 172;
+static constexpr int P_BACK_W = 224, P_BACK_H = 54;  // the tap area for going back (the album line)
+static constexpr RoundButton B_PLAY{160, 36}, S_PLAY{160, 34}, S_BACK{76, 28}, S_FWD{244, 28};
 static constexpr int VB_X = 232, VB_Y = 10, VB_W = 80, VB_H = 40;  // the volume button
 static constexpr int PB_X = 16, PB_Y = 226, PB_W = 288, PB_H = 8;  // progress (just shows; no seeking)
-static int cardAlbumShown = -2;  // the album whose card the player is showing
 
 static uint32_t lastTouchMs = 0;
 static bool dimmed = false;
@@ -2467,7 +2477,7 @@ static void drawSkipSecButton(const RoundButton& b, bool fwd, int secs) {
 }
 
 static void drawControls() {
-  M5.Display.fillRect(P_COL_X - 6, P_CTRL_Y - B_PLAY.r - 3, 326 - P_COL_X, B_PLAY.r * 2 + 10, C_BG);
+  M5.Display.fillRect(0, P_CTRL_Y - B_PLAY.r - 3, 320, B_PLAY.r * 2 + 10, C_BG);
   if (storyMode()) {
     drawSkipSecButton(S_BACK, false, 15);
     drawSkipSecButton(S_FWD, true, 30);
@@ -2477,17 +2487,22 @@ static void drawControls() {
   }
 }
 
-// "3 of 12" (or "Chapter 3 of 22"), the volume button, the title, and how long is left
-// for books and podcasts.
+// "< album" and "Song 3 of 12" (or chapter / episode), the volume button, the title, and
+// how long is left for books and podcasts.
 static void drawPlayerInfo() {
   auto& d = M5.Display;
-  d.fillRect(P_COL_X - 6, 0, 326 - P_COL_X, P_CTRL_Y - B_PLAY.r - 3, C_BG);
+  d.fillRect(0, 0, 320, P_CTRL_Y - B_PLAY.r - 3, C_BG);
   bool story = storyMode();
-  String n = String(current + 1) + " of " + String(tracks.size());
-  d.setFont(&fonts::FreeSansBold9pt7b);
+  ShelfKind kind = albumKind(playAlbum);
+  iconArrow(P_COL_X + 4, P_ALBUM_Y, 0, C_WHITE);
+  d.setFont(&fonts::FreeSansBold12pt7b);
   d.setTextDatum(middle_left);
+  d.setTextColor(C_WHITE);
+  d.drawString(fitLine(albumName(), VB_X - P_COL_X - 30), P_COL_X + 18, P_ALBUM_Y + 1);
+  const char* noun = kind == ShelfKind::Books ? "Chapter " : kind == ShelfKind::Podcasts ? "Episode " : "Song ";
+  d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextColor(C_DIM);
-  d.drawString(story && albumKind(playAlbum) == ShelfKind::Books ? "Chapter " + n : n, P_COL_X + 4, P_SUB_Y);
+  d.drawString(String(noun) + String(current + 1) + " of " + String(tracks.size()), P_COL_X + 18, P_SUB_Y + 1);
   drawVolumeButton();
   drawTitle(title, P_COL_CX, P_TITLE_CY, P_COL_W - 4, P_TITLE_H, C_WHITE);
   if (story) drawTimeLeft(true);
@@ -2505,13 +2520,11 @@ static void drawPlayProgress() {
 static void drawPlayer() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
-  cardAlbumShown = playAlbum;
   if (tracks.empty()) {
     d.fillRoundRect(16, 44, 288, 160, 18, C_OFF);
     drawTitle("No songs yet! Ask a grown-up to add some.", 160, 124, 260, 140, C_WHITE);
     return;
   }
-  drawAlbumCard(playAlbum, CARD_X, CARD_Y, CARD_W, CARD_H);
   drawPlayerInfo();
   drawControls();
   drawPlayProgress();
@@ -2609,9 +2622,9 @@ static void watchPower() {
 }
 
 // ----- albums -----
-// Three tall album cards, with page dots centered underneath; swipe sideways for more.
+// Page dots centered at the top, then three tall album cards; swipe sideways for more.
 // The playing album gets a ring and a badge, podcasts with new episodes a dot.
-static constexpr int AL_CARD_Y = CARD_Y, AL_CARD_W = CARD_W, AL_CARD_H = CARD_H, AL_DOTS_Y = 196;  // the now-playing bar below
+static constexpr int AL_DOTS_Y = 9, AL_CARD_Y = 20, AL_CARD_W = CARD_W, AL_CARD_H = CARD_H;  // the now-playing bar below
 static constexpr int AL_GAP = 13, AL_X0 = 12, TILES = 3;
 
 static int viewShelf = 0;
@@ -2728,12 +2741,12 @@ static void handleShelves(const m5::touch_detail_t& t) {
 // ----- songs -----
 // The album's tall card on the left (it slides over from where it was on the album
 // picker), and its songs beside it, all in one font size (long titles wrap onto a second
-// line). Swipe up/down to scroll, sideways to go back. Podcast episodes: taller rows
-// with a date badge.
+// line). Tap a song to play it (the list stays; tap the playing one to pause). Swipe
+// up/down to scroll, sideways to go back. Podcast episodes: taller rows with a date badge.
 static constexpr int TC_X = CARD_X, TC_Y = CARD_Y;  // the card: same size as on the album picker
 static constexpr int TL_Y = 8, TL_X = TC_X + AL_CARD_W + 16, TL_W = 306 - TL_X;
-static int trRowH() { return isPodcastAlbum(viewAlbum) ? 49 : 39; }  // above the now-playing bar
-static int trRows() { return isPodcastAlbum(viewAlbum) ? 4 : 5; }
+static int trRowH() { return isPodcastAlbum(viewAlbum) ? 49 : 48; }  // above the now-playing bar
+static int trRows() { return 4; }
 static int slideFromX = -1;  // set when a card was tapped on the album picker: slide it over
 
 static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown in the list
@@ -2776,12 +2789,13 @@ static void drawProgressMark(int i, int x0, int x1, int y, int h, bool playing) 
 // The tapped album's card glides from its place on the album picker to the left edge.
 static void slideCard(int a, int fromX) {
   auto& d = M5.Display;
-  int prev = fromX;
+  int px = fromX, py = AL_CARD_Y;
   for (int f = 1; f <= 4; f++) {
-    int x = fromX + (TC_X - fromX) * f / 4;
-    d.fillRect(prev - 4, TC_Y - 4, AL_CARD_W + 18, AL_CARD_H + 10, C_BG);
-    drawAlbumCard(a, x, TC_Y, AL_CARD_W, AL_CARD_H);
-    prev = x;
+    int x = fromX + (TC_X - fromX) * f / 4, y = AL_CARD_Y + (TC_Y - AL_CARD_Y) * f / 4;
+    d.fillRect(px - 4, py - 4, AL_CARD_W + 18, AL_CARD_H + 12, C_BG);
+    drawAlbumCard(a, x, y, AL_CARD_W, AL_CARD_H);
+    px = x;
+    py = y;
     audioPump();
   }
 }
@@ -2790,8 +2804,8 @@ static void drawTracks() {
   auto& d = M5.Display;
   if (slideFromX >= 0) {  // just picked: keep only that card, then move it over
     d.fillScreen(C_BG);
-    drawAlbumCard(viewAlbum, slideFromX, TC_Y, AL_CARD_W, AL_CARD_H);
-    if (slideFromX != TC_X) slideCard(viewAlbum, slideFromX);
+    drawAlbumCard(viewAlbum, slideFromX, AL_CARD_Y, AL_CARD_W, AL_CARD_H);
+    slideCard(viewAlbum, slideFromX);
     slideFromX = -1;
   } else {
     d.fillScreen(C_BG);
@@ -2825,7 +2839,7 @@ static void drawTracks() {
         d.drawString(String(i + 1), TL_X + 24, my);
       }
       d.setFont(&fonts::FreeSansBold9pt7b);
-      int tx = TL_X + 52, tw = TL_W - 52 - 16;
+      int tx = TL_X + 54, tw = TL_W - 54 - 18;
       auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
       int lh = 17, ty = my - (int)(lines.size() - 1) * lh / 2;
       d.setTextDatum(middle_left);
@@ -2844,7 +2858,7 @@ static void drawTracks() {
       d.setTextColor(C_WHITE);
       d.drawString(String(i + 1), nx, my);
     }
-    int tx = TL_X + 38, tw = TL_W - 38 - (isResumable(viewAlbum) ? 22 : 8);
+    int tx = TL_X + 42, tw = TL_W - 42 - (isResumable(viewAlbum) ? 26 : 14);
     d.setFont(&fonts::FreeSansBold9pt7b);  // one size for every title; long ones take two lines
     d.setTextDatum(middle_left);
     d.setTextColor(C_WHITE);
@@ -3247,7 +3261,7 @@ static void redraw() {
     dirtyNow = false;
     drew = true;
     if (screen == Screen::Player) {
-      if (tracks.empty() || playAlbum != cardAlbumShown) drawPlayer();
+      if (tracks.empty()) drawPlayer();
       else { drawPlayerInfo(); drawControls(); drawPlayProgress(); }
     } else if (screen == Screen::Tracks) {  // the playing row moved
       drawTracks();
@@ -3276,7 +3290,7 @@ static bool flickedY(const m5::touch_detail_t& t, int& dir) {
 }
 
 // Getting around. The middle touch button is Home: the shelves (or the albums, with
-// just one shelf). Back (tapping the player's card, a sideways swipe on the song list):
+// just one shelf). Back (the player's "< album" line, a sideways swipe on the song list):
 // player -> its songs -> the shelf's albums. The now-playing bar: the player.
 static void goBack() {
   if (screen == Screen::Player && playAlbum >= 0) openTracks(playAlbum);
@@ -3304,7 +3318,7 @@ static void handlePlayer(const m5::touch_detail_t& t) {
   int dir;
   if (flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }  // swipe left = next song, right = previous
   if (!t.wasClicked()) return;
-  if (t.x < CARD_X + CARD_W + 8 && t.y < CARD_Y + CARD_H + 8) { navigate(0); return; }  // the card: back to its songs
+  if (t.x < P_BACK_W && t.y < P_BACK_H) { navigate(0); return; }  // "< album": back to its songs
   if (t.x >= VB_X - 8 && t.y >= VB_Y - 6 && t.y < VB_Y + VB_H + 8) { buzz(); openVolume(); return; }
   if (!story) { if (hit(B_PLAY, P_CTRL_Y, t.x, t.y)) { buzz(); togglePause(); } return; }
   if (hit(S_PLAY, P_CTRL_Y, t.x, t.y)) { buzz(); togglePause(); }
@@ -3342,13 +3356,9 @@ static void handleTracks(const m5::touch_detail_t& t) {
   if (!t.wasClicked() || t.x < TL_X - 4 || t.y < TL_Y - 4) return;  // the card itself does nothing
   int r = (t.y - TL_Y) / trRowH(), i = tracksTop + r;
   if (r >= trRows() || i >= (int)viewTracks.size()) return;
-  buzz();
-  if (viewAlbum == playAlbum && i == current) {  // the song that's already on: don't restart it
-    if (paused) togglePause();
-  } else {
-    playAlbumTrack(viewAlbum, i);
-  }
-  showScreen(Screen::Player);
+  buzz();  // play it and stay on the list (the now-playing bar goes to the player)
+  if (viewAlbum == playAlbum && i == current) togglePause();  // the song that's on: pause / carry on
+  else playAlbumTrack(viewAlbum, i);
 }
 
 // Grown-ups: hold two of the three touch buttons together for 3 s. A yellow strip grows
@@ -3789,7 +3799,7 @@ void loop() {
   M5.update();
   handleSerial();
 
-  if (mp3->isRunning() && !paused && !mp3->loop()) {  // track finished... or hit a damaged spot
+  if (mp3->isRunning() && !paused && out.hasRoom() && !mp3->loop()) {  // track finished... or hit a damaged spot
     bool nearEnd = !file || file->getPos() + 65536 >= file->getSize();
     if (!nearEnd && recoverTries < 3) {  // jump a little past the damage and carry on
       recoverTries++;
