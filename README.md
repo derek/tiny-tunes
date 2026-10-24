@@ -1,21 +1,20 @@
 # Tiny Tunes
 
-A kids' audio player, bedside companion and learning-game device for the
-[M5Stack Core2](https://docs.m5stack.com/en/core/core2) (ESP32, 320×240 touchscreen,
-speaker, battery, microSD). Built for a 5- and a 7-year-old: big picture buttons,
-no internet browsing, everything chosen by a grown-up.
+A kids' audio player for the [M5Stack Core2](https://docs.m5stack.com/en/core/core2)
+(ESP32, 320×240 touchscreen, speaker, battery, microSD): music, podcasts and audiobooks.
+Built for a 5- and a 7-year-old: big picture buttons, no internet browsing, everything
+chosen by a grown-up.
 
-The three touch buttons above the screen are places:
+Everything is on the screen, Yoto-style: shelves (Music, Podcasts, Books) → albums →
+tracks → the player, where the album's tall card sits on the left and big buttons on
+the right. Books and podcasts get 15 s back / 30 s ahead, a sleep timer, and resume
+where they stopped. The speaker button asks "How loud?" with three choices (a mouse,
+a cat, a lion). Snackbars at the bottom say when the battery is low, it's charging,
+or headphones connect.
 
-| Button | Place | What's there |
-|---|---|---|
-| ♪ left | **Listen** | Albums and podcasts from the SD card, with cover art. Plays to Bluetooth headphones or the built-in speaker. |
-| ★ middle | **Play** | Learning games: Missing Letter, Right Spelling, Telling Time, Math. Each levels up and down by itself in rounds of 5. |
-| ☾ right | **Sleep** | Big clock with a moon/sun "OK to wake" signal, sleep timer with fade-out, rain/ocean sounds, night-light. |
-
-Holding the top of the screen for 3 seconds opens the grown-ups screen: volume limit,
-brightness, auto-off, wake-up time, Bluetooth pairing, and stats (battery, storage,
-listening time, game levels).
+The touch buttons above the screen are hard to see, so they're only for grown-ups:
+hold two of them together for 3 seconds for the grown-ups screen (how loud "Loud" is,
+brightness, auto-off, Bluetooth pairing, WiFi, and stats).
 
 ## Two firmware modes
 
@@ -81,6 +80,7 @@ $PY upload.py "~/Music/Some Artist - Some Album"   # upload an album folder
 $PY upload.py --ls                                 # list the card
 $PY upload.py --wifi MyNetwork                     # save WiFi credentials (prompts for the password)
 $PY upload.py --mode wifi                          # reboot into WiFi (or bt) mode
+$PY upload.py --name Ava                           # name the owner: "Hi, Ava!", ava-tunes.local
 ```
 
 Every `upload.py` run also sets the device clock from the computer.

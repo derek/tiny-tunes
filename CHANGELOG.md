@@ -6,6 +6,35 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.5.0 — 2026-10-23
+
+### Changed
+- A new look, Yoto-style: the album's tall card on the left of the player and the
+  song list, with the cover on top and a color picked from it. Shelves are tall cards too.
+- No top bar. Battery and headphone news come as a snackbar at the bottom instead:
+  "Charge me!" at 20, 10 and 5% (with a buzz at 5%), "Charging", "All charged!",
+  "Headphones on", "Playing out loud". A tap dismisses it.
+- Volume: the speaker button on the player asks "How loud?" with three big choices
+  (a mouse, a cat, a lion). "Loud" is the grown-ups' limit (renamed "Loud is").
+- Everything is on the screen: a round back button on the player and song list, a
+  green now-playing button on the albums and shelves screens. The touch buttons
+  above the screen now only open the grown-ups screen: hold two of them together for
+  3 seconds (holding the top of the screen no longer does).
+- Books and podcasts: back 15 s / ahead 30 s instead of previous / next, how many
+  minutes are left, and a sleep timer button (15 to 60 minutes, fades out).
+- Track dots under the progress bar show where you are in an album (up to 16 songs).
+- Long song titles wrap onto two lines in the song list.
+
+### Added
+- The owner's name, set on the web page's new Settings section or with
+  `upload.py --name`: "Hi, Ava!" on the splash, "Ava's Tiny Tunes" on the web page,
+  and `ava-tunes.local` on the network in WiFi mode (tells two devices apart).
+- A dot on podcast covers with new episodes; a WiFi mark on the shelves in WiFi mode.
+
+### Removed
+- The Play place and its games, and the Sleep place (clock, rain/ocean sounds,
+  night-light, wake-up time). The sleep timer lives on in the book/podcast player.
+
 ## 0.4.2 — 2026-10-23
 
 ### Added

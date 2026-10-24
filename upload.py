@@ -14,6 +14,7 @@ from an image in the folder, or from art embedded in the MP3s, shrunk to 160x160
     $PY upload.py --rm /music                               # delete a file or album
     $PY upload.py --wifi MyNetwork                          # set up WiFi (prompts for password)
     $PY upload.py --mode bt                                 # reboot into Bluetooth / WiFi mode
+    $PY upload.py --name Ava                                # whose Tiny Tunes it is ("" to clear)
     $PY upload.py --prepare /Volumes/CARD                   # card in your Mac: make cover.jpg files
 
 Uploads go over WiFi (fast) when the Core2 is in WiFi mode, else over USB.
@@ -279,6 +280,7 @@ def main():
     ap.add_argument("--rm", metavar="PATH", help="delete a file or a whole album folder on the card")
     ap.add_argument("--wifi", metavar="SSID", help="save WiFi credentials and switch to WiFi mode")
     ap.add_argument("--mode", choices=("bt", "wifi"), help="reboot into Bluetooth or WiFi mode")
+    ap.add_argument("--name", metavar="NAME", help='the owner\'s first name, shown on the device ("" clears it)')
     ap.add_argument("--usb", action="store_true", help="upload over USB even in WiFi mode")
     ap.add_argument("--prepare", metavar="CARD", help="SD card mounted on this Mac: make cover.jpg files")
     ap.add_argument("--port")
@@ -301,6 +303,10 @@ def main():
             print(f"Connected: http://{expect(s, 'IP', timeout=45).split()[1]}")
         except TimeoutError:
             print("No connection after 45 s. Check the password, and that the network is 2.4 GHz.")
+        return
+    if args.name is not None:
+        command(s, f"NAME {args.name.strip()}".rstrip())
+        print(f"Named it {args.name.strip()}'s Tiny Tunes." if args.name.strip() else "Cleared the owner's name.")
         return
     if args.mode:
         command(s, f"MODE {args.mode}")

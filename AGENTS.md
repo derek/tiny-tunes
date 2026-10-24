@@ -1,9 +1,10 @@
 # Notes for agents working on Tiny Tunes
 
-Tiny Tunes is a kids' audio player, bedside companion and learning-game device for
-the M5Stack Core2, used by a **5-year-old and a 7-year-old**. Keep UI text, controls
-and game difficulty right for a pre-reader through a 2nd grader. See README.md for
-setup, build and the SD card layout.
+Tiny Tunes is a kids' audio player (music, podcasts, audiobooks) for the M5Stack Core2,
+used by a **5-year-old and a 7-year-old**. Keep UI text and controls right for a
+pre-reader through a 2nd grader: pictures over words, big targets, everything on the
+screen (the touch buttons above it are grown-ups only). See README.md for setup, build
+and the SD card layout.
 
 ## Working agreements
 
@@ -33,6 +34,6 @@ setup, build and the SD card layout.
 - **Serial runs at 460800**: the Core2's USB-serial chip garbles 921600. Opening the
   port resets the device.
 - **Settings namespace** is `core2mp3` (the project's first name). Renaming it would
-  reset everyone's settings and game progress.
-- The screen is rotated 180° (`ROTATION = 3`); the three touch buttons are read in
-  raw panel coordinates, hence `BTN_LEFT` / `BTN_RIGHT`.
+  reset everyone's settings.
+- The screen is rotated 180° (`ROTATION = 3`), so the three touch buttons sit above
+  it. They only open the grown-ups screen (two held together for 3 s).
