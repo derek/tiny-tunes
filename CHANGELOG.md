@@ -6,6 +6,13 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.6.2 — 2026-10-23
+
+### Changed
+- Albums: no shelf name at the top; the cards move up and the page dots sit
+  centered underneath them.
+- The song list has a round back button at the top left.
+
 ## 0.6.1 — 2026-10-23
 
 ### Changed

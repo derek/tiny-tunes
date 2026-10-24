@@ -2552,9 +2552,9 @@ static void watchPower() {
 }
 
 // ----- albums -----
-// The shelf's name and page dots, then three tall album cards; swipe sideways for more.
+// Three tall album cards, with page dots centered underneath; swipe sideways for more.
 // The playing album gets a ring and a badge, podcasts with new episodes a dot.
-static constexpr int AL_HEAD_CY = 16, AL_CARD_Y = 32, AL_CARD_W = 90, AL_CARD_H = 198;
+static constexpr int AL_CARD_Y = 10, AL_CARD_W = 90, AL_CARD_H = 200, AL_DOTS_Y = 227;
 static constexpr int AL_GAP = 13, AL_X0 = 12, TILES = 3;
 
 static int viewShelf = 0;
@@ -2577,15 +2577,11 @@ static void drawAlbums() {
   auto& d = M5.Display;
   albumsPage = constrain(albumsPage, 0, albumPages() - 1);  // albums may have been deleted
   d.fillScreen(C_BG);
-  d.setFont(&fonts::FreeSansBold12pt7b);
-  d.setTextDatum(middle_left);
-  d.setTextColor(C_WHITE);
-  d.drawString(shelves.empty() ? String("Music") : shelves[viewShelf].name, AL_X0, AL_HEAD_CY);
-  int pages = albumPages();
-  for (int p = 0; p < pages && pages > 1 && p < 12; p++) {
-    int n = std::min(pages, 12), x = 306 - (n - 1 - p) * 13;
-    if (p == albumsPage) d.fillRoundRect(x - 7, AL_HEAD_CY - 3, 14, 7, 3, C_WHITE);
-    else d.fillCircle(x, AL_HEAD_CY, 3, rgb(74, 81, 128));
+  int pages = albumPages(), n = std::min(pages, 16);
+  for (int p = 0; p < n && pages > 1; p++) {
+    int x = 160 + (p * 2 - (n - 1)) * 13 / 2;
+    if (p == albumsPage) d.fillRoundRect(x - 7, AL_DOTS_Y - 3, 14, 7, 3, C_WHITE);
+    else d.fillCircle(x, AL_DOTS_Y, 3, rgb(74, 81, 128));
   }
   if (shelfAlbums.empty()) {  // Music, Podcasts and Books show even with nothing in them
     d.fillRoundRect(16, AL_CARD_Y + 20, 288, 150, 18, C_OFF);
@@ -2674,10 +2670,11 @@ static void handleShelves(const m5::touch_detail_t& t) {
 }
 
 // ----- songs -----
-// A header with a small cover and the album's name, then the songs as full-width rows,
+// A header with a back button, a small cover and the album's name, then the songs as full-width rows,
 // all in one font size (long titles wrap onto a second line). Swipe up/down to scroll,
 // right to go back. Podcast episodes: taller rows with a date badge.
 static constexpr int TH_CY = 24, TL_Y = 50, TL_X = 8, TL_W = 298;
+static constexpr int TB_X = 26, TB_R = 18;  // the back button
 static int trRowH() { return isPodcastAlbum(viewAlbum) ? 62 : 38; }
 static int trRows() { return isPodcastAlbum(viewAlbum) ? 3 : 5; }
 
@@ -2722,18 +2719,20 @@ static void drawTracks() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
   uint16_t ac = albumTint(viewAlbum);
-  if (M5Canvas* cv = getCover(viewAlbum, 36)) cv->pushSprite(&d, 10, TH_CY - 18, COVER_KEY);
-  else d.fillRoundRect(10, TH_CY - 18, 36, 36, 6, ac);
+  drawRound(TB_X, TH_CY, TB_R, C_ROW);
+  iconArrow(TB_X - 1, TH_CY, 0, C_WHITE);
+  if (M5Canvas* cv = getCover(viewAlbum, 36)) cv->pushSprite(&d, 54, TH_CY - 18, COVER_KEY);
+  else d.fillRoundRect(54, TH_CY - 18, 36, 36, 6, ac);
   bool podcast = isPodcastAlbum(viewAlbum);
   int n = viewTracks.size();
   const char* noun = podcast ? "episode" : albumKind(viewAlbum) == ShelfKind::Books ? "chapter" : "song";
   d.setFont(&fonts::FreeSansBold12pt7b);
   d.setTextDatum(middle_left);
   d.setTextColor(C_WHITE);
-  d.drawString(fitLine(albums[viewAlbum].name, 256), 54, TH_CY - 7);
+  d.drawString(fitLine(albums[viewAlbum].name, 214), 98, TH_CY - 7);
   d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextColor(C_DIM);
-  d.drawString(String(n) + " " + noun + (n == 1 ? "" : "s"), 54, TH_CY + 12);
+  d.drawString(String(n) + " " + noun + (n == 1 ? "" : "s"), 98, TH_CY + 12);
   int rowH = trRowH(), rows = trRows();
   for (int r = 0; r < rows; r++) {
     int i = tracksTop + r;
@@ -3244,7 +3243,7 @@ static void handleAlbums(const m5::touch_detail_t& t) {
     if (p != albumsPage) { buzz(); albumsPage = p; dirtyAll = true; }
     return;
   }
-  if (!t.wasClicked() || t.y < AL_CARD_Y - 6) return;
+  if (!t.wasClicked() || t.y >= AL_CARD_Y + AL_CARD_H + 8) return;
   for (int k = 0; k < TILES; k++) {
     int x = AL_X0 + k * (AL_CARD_W + AL_GAP), slot = albumsPage * TILES + k;
     if (t.x >= x - AL_GAP / 2 && t.x < x + AL_CARD_W + AL_GAP / 2 && slot < (int)shelfAlbums.size()) {
@@ -3264,7 +3263,10 @@ static void handleTracks(const m5::touch_detail_t& t) {
   if (flickedY(t, dir)) { scroll(dir * (trRows() - 1)); return; }  // keep one row for context
   if (flickedX(t, dir) && dir < 0) { navigate(0); return; }       // swipe right = back
   if (!t.wasClicked()) return;
-  if (t.y < TL_Y - 4) return;  // the header
+  if (t.y < TL_Y - 4) {  // the header: back
+    if (hitAt(TB_X, TH_CY, TB_R, t.x, t.y) || t.x < 50) navigate(0);
+    return;
+  }
   int r = (t.y - TL_Y) / trRowH(), i = tracksTop + r;
   if (r >= trRows() || i >= (int)viewTracks.size()) return;
   buzz();
