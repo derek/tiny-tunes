@@ -6,6 +6,17 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.7.3 — 2026-10-23
+
+### Changed
+- The green now-playing button's bars dance while music plays.
+- The song list's album card runs down to the bottom (it grows as it slides over),
+  and song titles are a smaller size.
+
+### Fixed
+- The left album's card moved a few pixels when sliding over to the song list; it now
+  stays put.
+
 ## 0.7.2 — 2026-10-23
 
 ### Changed

@@ -2059,7 +2059,7 @@ static uint16_t albumTint(int a) {
 // button. See "the top bar".
 static constexpr int NAV_H = 36;
 // The tall album card, the same size and height on the album picker and the song list.
-static constexpr int CARD_X = 8, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 172;
+static constexpr int CARD_X = 12, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 172;
 // Player: "Song 3 of 12", the title, the play button (books and podcasts: back 15 s /
 // ahead 30 s on either side of it), a progress bar along the bottom. Swipe for the next /
 // previous song.
@@ -2607,7 +2607,7 @@ static void watchPower() {
 // Three tall album cards under the top bar, page dots centered below; swipe sideways for more.
 // The playing album gets a ring and a badge, podcasts with new episodes a dot.
 static constexpr int AL_CARD_Y = CARD_Y, AL_CARD_W = CARD_W, AL_CARD_H = CARD_H, AL_DOTS_Y = 230;  // dots at the very bottom
-static constexpr int AL_GAP = 13, AL_X0 = 12, TILES = 3;
+static constexpr int AL_GAP = 13, AL_X0 = CARD_X, TILES = 3;
 
 static int viewShelf = 0;
 static std::vector<int> shelfAlbums;  // indexes into albums for viewShelf
@@ -2679,17 +2679,19 @@ static bool navHasBack() { return screen == Screen::Tracks || screen == Screen::
 // Top right on Home, the albums and the songs: green with an equalizer while something
 // plays, grey when it's paused (or nothing is loaded). Tap it for the player, which has
 // the volume button in the same spot.
-static void drawNowPlayingButton() {
+static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random bar heights
+  static uint8_t heights[3] = {9, 15, 12};
+  static uint32_t seed = 88675123;  // xorshift; libc rand() costs IRAM
   auto& d = M5.Display;
   bool on = musicIsPlaying();
   uint16_t bg = on ? C_GREEN : C_OFF;
   d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, VB_H / 2, bg);
   int cx = VB_X + VB_W / 2, cy = VB_Y + VB_H / 2;
   uint16_t ink = haveNowPlaying() ? C_WHITE : rgb(90, 96, 130);
-  if (on || !haveNowPlaying()) {  // three equalizer bars
-    d.fillRoundRect(cx - 11, cy - 2, 5, 9, 2, ink);
-    d.fillRoundRect(cx - 3, cy - 8, 5, 15, 2, ink);
-    d.fillRoundRect(cx + 5, cy - 5, 5, 12, 2, ink);
+  if (on || !haveNowPlaying()) {  // three equalizer bars, standing on one line
+    if (bounce)
+      for (auto& h : heights) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; h = 5 + seed % 13; }
+    for (int i = 0; i < 3; i++) d.fillRoundRect(cx - 11 + i * 8, cy + 8 - heights[i], 5, heights[i], 2, ink);
   } else {  // paused: a play mark
     iconPlay(cx - 1, cy, 12, ink);
   }
@@ -2808,7 +2810,7 @@ static void handleShelves(const m5::touch_detail_t& t) {
 // picker), and its songs beside it, all in one font size (long titles wrap onto a second
 // line). Tap a song to play it (the list stays; tap the playing one to pause). Swipe
 // up/down to scroll; the top bar goes back. Podcast episodes have a date badge.
-static constexpr int TC_X = CARD_X, TC_Y = CARD_Y;  // the card: same size as on the album picker
+static constexpr int TC_X = CARD_X, TC_Y = CARD_Y, TC_H = 240 - CARD_Y - 8;  // the card: as on the album picker, down to the bottom
 static constexpr int TL_Y = CARD_Y, TL_X = TC_X + AL_CARD_W + 16, TL_W = 306 - TL_X;
 static int trRowH() { return 39; }
 static int trRows() { return 5; }
@@ -2854,13 +2856,12 @@ static void drawProgressMark(int i, int x0, int x1, int y, int h, bool playing) 
 // The tapped album's card glides from its place on the album picker to the left edge.
 static void slideCard(int a, int fromX) {
   auto& d = M5.Display;
-  int px = fromX, py = AL_CARD_Y;
+  int px = fromX;
   for (int f = 1; f <= 4; f++) {
-    int x = fromX + (TC_X - fromX) * f / 4, y = AL_CARD_Y + (TC_Y - AL_CARD_Y) * f / 4;
-    d.fillRect(px - 4, py - 4, AL_CARD_W + 18, AL_CARD_H + 12, C_BG);
-    drawAlbumCard(a, x, y, AL_CARD_W, AL_CARD_H);
+    int x = fromX + (TC_X - fromX) * f / 4, h = AL_CARD_H + (TC_H - AL_CARD_H) * f / 4;
+    if (x != px) d.fillRect(px - 4, TC_Y - 4, AL_CARD_W + 18, TC_H + 12, C_BG);
+    drawAlbumCard(a, x, TC_Y, AL_CARD_W, h);
     px = x;
-    py = y;
     audioPump();
   }
 }
@@ -2876,7 +2877,7 @@ static void drawTracks() {
   } else {
     d.fillScreen(C_BG);
     drawNavBar(2);
-    drawAlbumCard(viewAlbum, TC_X, TC_Y, AL_CARD_W, AL_CARD_H);
+    drawAlbumCard(viewAlbum, TC_X, TC_Y, AL_CARD_W, TC_H);
   }
   uint16_t ac = albumTint(viewAlbum);
   bool podcast = isPodcastAlbum(viewAlbum);
@@ -2905,10 +2906,10 @@ static void drawTracks() {
         d.setFont(&fonts::FreeSansBold12pt7b);
         d.drawString(String(i + 1), TL_X + 24, my);
       }
-      d.setFont(&fonts::FreeSansBold9pt7b);
+      d.setFont(&fonts::DejaVu12);
       int tx = TL_X + 54, tw = TL_W - 54 - 18;
       auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
-      int lh = 17, ty = my - (int)(lines.size() - 1) * lh / 2;
+      int lh = 14, ty = my - (int)(lines.size() - 1) * lh / 2;
       d.setTextDatum(middle_left);
       d.setTextColor(C_WHITE);
       for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
@@ -2919,18 +2920,17 @@ static void drawTracks() {
     d.fillCircle(nx, my, 12, playing ? C_WHITE : C_OFF);
     if (playing) iconPlaying(nx, my, ac);
     else {
-      if (n > 99) d.setFont(&fonts::DejaVu9);
-      else d.setFont(&fonts::FreeSansBold9pt7b);
+      d.setFont(n > 99 ? &fonts::DejaVu9 : &fonts::DejaVu12);
       d.setTextDatum(middle_center);
       d.setTextColor(C_WHITE);
       d.drawString(String(i + 1), nx, my);
     }
     int tx = TL_X + 42, tw = TL_W - 42 - (isResumable(viewAlbum) ? 26 : 14);
-    d.setFont(&fonts::FreeSansBold9pt7b);  // one size for every title; long ones take two lines
+    d.setFont(&fonts::DejaVu12);  // one size for every title; long ones take two lines
     d.setTextDatum(middle_left);
     d.setTextColor(C_WHITE);
     auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
-    int lh = 16, ty = my - (int)(lines.size() - 1) * lh / 2;
+    int lh = 14, ty = my - (int)(lines.size() - 1) * lh / 2;
     for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
     drawProgressMark(i, tx, TL_X + TL_W - 8, y, h, playing);
   }
@@ -3914,8 +3914,13 @@ void loop() {
   handleIdle();
   redraw();
 
-  static uint32_t lastTick = 0;
+  static uint32_t lastTick = 0, lastBounce = 0;
   uint32_t now = millis();
+  bool library = screen == Screen::Shelves || screen == Screen::Albums || screen == Screen::Tracks;
+  if (library && musicIsPlaying() && !dimmed && !volPanelUntil && now - lastBounce > 150) {
+    lastBounce = now;
+    drawNowPlayingButton(true);  // the green button's bars dance while music plays
+  }
   if (screen == Screen::Player && !dimmed && !volPanelUntil && !tracks.empty() && now - lastTick > 1000) {
     lastTick = now;
     if (!snackUp()) drawPlayProgress();  // the snackbar sits over it
