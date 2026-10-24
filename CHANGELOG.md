@@ -6,6 +6,13 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.7.7 — 2026-10-24
+
+### Changed
+- Album cards are completely flat: no second card peeking out on the right.
+- The player no longer shows "Song 3 of 12" (books and podcasts still show the minutes
+  left).
+
 ## 0.7.6 — 2026-10-24
 
 ### Changed

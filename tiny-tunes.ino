@@ -2090,8 +2090,7 @@ static uint16_t albumTint(int a) {
 static constexpr int NAV_H = 36;
 // The tall album card, the same size and height on the album picker and the song list.
 static constexpr int CARD_X = 12, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 172;
-// Player: "Song 3 of 12" (books and podcasts: and the minutes left), the title, the
-// artist, the play button (books and podcasts: back 15 s /
+// Player: (books and podcasts: the minutes left), the title, the artist, the play button (books and podcasts: back 15 s /
 // ahead 30 s on either side of it), a progress bar along the bottom. Swipe for the next /
 // previous song.
 static constexpr int P_COL_X = 12, P_COL_CX = 160, P_COL_W = 296;
@@ -2335,11 +2334,9 @@ static void drawShelfIcon(ShelfKind kind, int cx, int cy, uint16_t c, uint16_t b
 }
 
 // ----- the tall card (albums and shelves) -----
-// A flat, white-edged card, with another card peeking out behind it for albums (like a
-// stack of cards).
-static void drawCardFrame(int x, int y, int w, int h, uint16_t fill, bool stacked) {
+// A flat, white-edged card.
+static void drawCardFrame(int x, int y, int w, int h, uint16_t fill) {
   auto& d = M5.Display;
-  if (stacked) d.fillRoundRect(x + 8, y + 3, w, h - 6, 13, rgb(44, 50, 96));
   d.fillRoundRect(x, y, w, h, 13, C_WHITE);
   d.fillRoundRect(x + 4, y + 4, w - 8, h - 8, 9, fill);
 }
@@ -2368,7 +2365,7 @@ static void drawAlbumCard(int a, int x, int y, int w, int h) {
   auto& d = M5.Display;
   M5Canvas* cv = getCover(a, AC_COVER);  // loads the cover first, which also picks its tint
   uint16_t fill = albumTint(a);
-  drawCardFrame(x, y, w, h, fill, true);
+  drawCardFrame(x, y, w, h, fill);
   int cx = x + w / 2, top;
   if (cv) {
     cv->pushSprite(&d, cx - AC_COVER / 2, y + 8, COVER_KEY);
@@ -2455,16 +2452,14 @@ static void handleVolume(const m5::touch_detail_t& t) {
 // ----- player -----
 static bool storyMode() { return isResumable(playAlbum); }
 
-// "Song 3 of 12"; for books and podcasts "Chapter 3 of 22 - 12 min left", the minutes
-// from the file size and its bitrate.
+// Books and podcasts: "12 min left" in this chapter or episode, from the file size and
+// its bitrate. (Music shows nothing here.)
 static void drawTimeLeft(bool force) {
   static String shown;
-  ShelfKind kind = albumKind(playAlbum);
-  const char* noun = kind == ShelfKind::Books ? "Chapter " : kind == ShelfKind::Podcasts ? "Episode " : "Song ";
-  String s = String(noun) + String(current + 1) + " of " + String(tracks.size());
+  String s;
   if (storyMode() && file && file->getSize() > file->getPos()) {
     uint32_t sec = (uint64_t)(file->getSize() - file->getPos()) * 8 / (trackKbps * 1000);
-    s += sec < 60 ? String(" - almost done") : " - " + String((sec + 30) / 60) + " min left";
+    s = sec < 60 ? String("Almost done") : String((sec + 30) / 60) + " min left";
   }
   if (s == shown && !force) return;
   shown = s;
@@ -2505,8 +2500,7 @@ static void drawControls() {
   }
 }
 
-// The top bar, "Song 3 of 12" (books and podcasts: and how long is left), the title, and
-// the artist.
+// The top bar, how long is left (books and podcasts), the title, and the artist.
 static void drawNavBar(int level);
 static void drawPlayerInfo() {
   auto& d = M5.Display;
@@ -2808,7 +2802,7 @@ static void drawShelves() {
     int x, y, w, h;
     shelfTileRect(i, x, y, w, h);
     uint16_t c = shelfColor(sh);
-    drawCardFrame(x, y, w, h, c, false);
+    drawCardFrame(x, y, w, h, c);
     int cy = y + h / 2 + 1, tx = x + 20;
     if (h >= 46) {  // room for the picture, with space around it (lots of shelves: just names)
       drawShelfIcon(sh.kind, x + 46, cy, C_WHITE, c, 66);
