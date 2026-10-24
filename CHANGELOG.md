@@ -6,6 +6,25 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.6.0 — 2026-10-23
+
+### Changed
+- The three touch buttons above the screen are Back, Home and Playing again, with
+  an icon for each along the top of the screen, right under it (the icons can be
+  tapped too). Holding two together for 3 s still opens the grown-ups screen.
+- Albums are tall cards, three at a time; swipe sideways for more.
+- The song list has full-width rows, with a small cover, the name and a big Play
+  button on top (books and podcasts: Play picks up where they stopped).
+- The player has no cover, card or progress bar: a line about the album, a big title,
+  and bigger buttons. Swipe the title for the next / previous song.
+- Volume: the volume button shows the level as 5 little bars; tapping it opens 5 big
+  bars to pick from (was "How loud?" with three animals). "Loud is" is now "Loudest".
+
+### Removed
+- Seeking (the progress bar) and the sleep timer button. Books and podcasts still
+  skip back 15 s / ahead 30 s.
+- The on-screen back and now-playing buttons (the touch buttons do that now).
+
 ## 0.5.0 — 2026-10-23
 
 ### Changed

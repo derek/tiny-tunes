@@ -5,16 +5,15 @@ A kids' audio player for the [M5Stack Core2](https://docs.m5stack.com/en/core/co
 Built for a 5- and a 7-year-old: big picture buttons, no internet browsing, everything
 chosen by a grown-up.
 
-Everything is on the screen, Yoto-style: shelves (Music, Podcasts, Books) → albums →
-tracks → the player, where the album's tall card sits on the left and big buttons on
-the right. Books and podcasts get 15 s back / 30 s ahead, a sleep timer, and resume
-where they stopped. The speaker button asks "How loud?" with three choices (a mouse,
-a cat, a lion). Snackbars at the bottom say when the battery is low, it's charging,
-or headphones connect.
+The three touch buttons above the screen are **Back**, **Home** and **Playing**, with an
+icon for each along the top of the screen. Home is the shelves (Music, Podcasts, Books)
+as tall Yoto-style cards; then albums as tall cards, three at a time; then the songs.
+The player keeps it simple: the title, big buttons, and a volume button with 5 steps.
+Books and podcasts skip 15 s back / 30 s ahead and resume where they stopped.
+Snackbars at the bottom say when the battery is low, it's charging, or headphones connect.
 
-The touch buttons above the screen are hard to see, so they're only for grown-ups:
-hold two of them together for 3 seconds for the grown-ups screen (how loud "Loud" is,
-brightness, auto-off, Bluetooth pairing, WiFi, and stats).
+Holding two of the touch buttons together for 3 seconds opens the grown-ups screen
+(loudest volume, brightness, auto-off, Bluetooth pairing, WiFi, and stats).
 
 ## Two firmware modes
 

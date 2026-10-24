@@ -12,14 +12,15 @@
 // switching modes reboots into the other slot (~2 s). SD card and settings are shared.
 // Build/flash both with ./flash.sh.
 //
-// Kid-friendly controls, all on the screen (no top bar):
-//   Shelves -> albums -> tracks -> player; the round < button (or a swipe right) goes back
-//   Player: the album's tall card on the left; prev / play / next on the right
-//     (books and podcasts: back 15 s / play / ahead 30 s, and a sleep timer)
-//   The speaker button: "How loud?" with three choices (quiet / medium / loud)
-//   Grids page sideways; lists scroll up/down; swipe the card for next / previous song
+// Kid-friendly controls:
+//   The three touch buttons above the screen: Back, Home, Playing (icons along the top of
+//     the screen show which is which, and can be tapped too)
+//   Home: shelves (Music, Podcasts, Books) as tall cards -> albums as tall cards -> songs
+//   Player: the title, big prev / play / next (books and podcasts: back 15 s / ahead 30 s),
+//     and the volume button (5 steps)
+//   Albums page sideways; lists scroll up/down; swipe the title for next / previous song
 //   Snackbars at the bottom: low battery, charging, headphones on/off
-//   Hold two of the touch buttons above the screen for 3 s: grown-ups screen
+//   Hold two of the touch buttons for 3 s: grown-ups screen
 //   Screen dims after 2 min untouched; powers off when paused on battery (15/30 min/never).
 //
 // Files can also be uploaded over USB with upload.py (see serial protocol below).
@@ -76,8 +77,11 @@ struct Shelf { String name, path; ShelfKind kind; int albums = 0, newCount = 0; 
 struct ResumeEntry { String file; uint32_t pos; bool done; };  // books/podcasts: see "resume"
 
 // Screen upside down (USB port on top). The three touch buttons then sit above the
-// screen; they're hard to see, so they only open the grown-ups screen (two held together).
+// screen, read in raw panel coordinates in C, B, A order: BTN_LEFT/BTN_RIGHT keep
+// "left" meaning Back from the viewer's side.
 static constexpr int ROTATION = 3;  // 1 = normal landscape
+#define BTN_LEFT  (ROTATION == 3 ? M5.BtnC : M5.BtnA)
+#define BTN_RIGHT (ROTATION == 3 ? M5.BtnA : M5.BtnC)
 
 static constexpr int SD_CS = 4;
 static constexpr uint8_t SPK_CH = 0;
@@ -1768,17 +1772,6 @@ static void playAlbumTrack(int a, int t) {
   playTrack(t);
 }
 
-// Jumps to `frac` (0..1) of the current song's audio, and plays.
-static void seekTo(float frac) {
-  if (current < 0 || tracks.empty()) return;
-  uint32_t size = file ? file->getSize() : fileSize(tracks[current]);
-  uint32_t start = file ? trackAudioStart : 0;
-  if (size <= start) return;
-  forceStartPos = std::max<uint32_t>(start + 1, start + (uint32_t)(constrain(frac, 0.0f, 0.995f) * (size - start)));
-  recoverTries = 0;
-  playTrack(current);
-}
-
 static void togglePause() {
   if (current < 0) return;
   if (paused && !(mp3 && mp3->isRunning())) { playTrack(current); return; }  // loaded but not started
@@ -2010,15 +2003,15 @@ static void prepareCovers() {
 }
 
 // ================= kid-friendly UI =================
-// No top bar, and the touch buttons above the screen are only for grown-ups: everything
-// a kid needs is on the screen.
+// The three touch buttons above the screen are Back, Home and Playing, with an icon for
+// each in a thin strip along the top of the screen, right under it (the icons can be
+// tapped too). Holding two of the buttons together for 3 s opens the grown-ups screen.
 // Shelves:  Music, Podcasts, Books (and any other shelf) as tall cards.
-// Albums:   cover tiles 3 x 2, paging sideways; the header's < goes back.
-// Tracks:   the album's tall card on the left, its songs on the right.
-// Player:   the same tall card on the left; back, volume, the song and big buttons on
-//           the right. Books and podcasts skip 15 s back / 30 s ahead and have a sleep timer.
+// Albums:   tall cards, 3 at a time, paging sideways.
+// Songs:    the album's name and a Play button on top, then full-width rows.
+// Player:   the song's title, big buttons, and the volume button (5 steps). Books and
+//           podcasts skip 15 s back / 30 s ahead instead of previous / next.
 // Snackbars pop up at the bottom for the battery and headphones.
-// Grown-ups: hold two of the touch buttons above the screen together for 3 s.
 
 static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return M5.Display.color565(r, g, b); }
 #define C_BG    rgb(18, 22, 48)
@@ -2047,24 +2040,19 @@ static uint16_t albumTint(int a) {
   return a >= 0 && a < (int)albums.size() && albums[a].tint ? albums[a].tint : albumColor(a);
 }
 
-// The tall card (player and tracks) and the right-hand column beside it.
-static constexpr int CARD_X = 8, CARD_Y = 8, CARD_W = 128, CARD_H = 222, CARD_COVER = 108;
-static constexpr int COL_X = 150, COL_W = 162, COL_CX = COL_X + COL_W / 2;
-static constexpr int HEAD_CY = 24, HEAD_R = 16;  // round back / volume buttons
-static constexpr int BACK_X = COL_X + HEAD_R, VOLB_X = COL_X + COL_W - HEAD_R;
-static constexpr int PROG_X = COL_X + 4, PROG_W = COL_W - 8, PROG_H = 10;  // seekable: drag or tap
-// Music: title, progress, track dots, prev / play / next.
-static constexpr int M_TITLE_CY = 70, M_TITLE_H = 52, M_PROG_Y = 108, M_DOTS_Y = 134, M_CTRL_Y = 192;
-// Books and podcasts: title, time left, progress, back 15 / play / ahead 30, sleep timer.
-static constexpr int S_TITLE_CY = 64, S_TITLE_H = 46, S_LEFT_Y = 98, S_PROG_Y = 112, S_CTRL_Y = 158, S_CHIP_Y = 198;
-static constexpr RoundButton B_PREV{COL_X + 22, 20}, B_PLAY{COL_CX, 26}, B_NEXT{COL_X + COL_W - 22, 20};
+// The strip along the top: an icon under each touch button (left, middle, right).
+static constexpr int STRIP_H = 20;
+static const int STRIP_X[3] = {53, 160, 267};
+// Player: a line about the album, the title, big buttons; the volume button top right.
+static constexpr int P_SUB_Y = 34, P_LEFT_Y = 54, P_TITLE_CY = 100, P_TITLE_H = 58, P_CTRL_Y = 178;
+static constexpr RoundButton B_PREV{62, 30}, B_PLAY{160, 38}, B_NEXT{258, 30};
+static constexpr int VB_X = 232, VB_Y = 25, VB_W = 80, VB_H = 40;  // the volume button
 
 static uint32_t lastTouchMs = 0;
 static bool dimmed = false;
 static int albumsPage = 0;
 static int viewAlbum = -1, tracksTop = 0;
 static std::vector<String> viewTracks;
-static int cardAlbumShown = -2;  // the album whose card the player is showing
 
 // A short pulse; loop() switches it off. The motor needs ~100 ms to be felt.
 // pulses: 1 for a tap, 2 (on-off-on) for a warning. Each edge flips the motor.
@@ -2220,14 +2208,6 @@ static void drawRound(int x, int y, int r, uint16_t color) {
   M5.Display.fillCircle(x, y + 3, r, C_SHADE);
   M5.Display.fillCircle(x, y, r, color);
 }
-static void drawBackButton(int x, int y) {
-  drawRound(x, y, HEAD_R, C_ROW);
-  iconArrow(x - 1, y, 0, C_WHITE);
-}
-static void drawVolumeButton(int x, int y) {
-  drawRound(x, y, HEAD_R, C_ROW);
-  iconSpeaker(x + 1, y, C_WHITE);
-}
 
 // USB plugged in? On the Core2 the AXP192's VBUS flag and voltage stay up on battery
 // (the 5 V boost feeds that line), so go by the battery current instead: on USB it
@@ -2298,9 +2278,9 @@ static void drawShelfIcon(ShelfKind kind, int cx, int cy, uint16_t c, uint16_t b
   }
 }
 
-// ----- the tall card -----
-// A white-edged card with a shadow, and another card peeking out behind it when
-// there's more than one track (like a stack of cards).
+// ----- the tall card (albums and shelves) -----
+// A white-edged card with a shadow, and another card peeking out behind it for albums
+// (like a stack of cards).
 static void drawCardFrame(int x, int y, int w, int h, uint16_t fill, bool stacked) {
   auto& d = M5.Display;
   if (stacked) d.fillRoundRect(x + 8, y + 3, w, h - 6, 13, rgb(44, 50, 96));
@@ -2310,101 +2290,125 @@ static void drawCardFrame(int x, int y, int w, int h, uint16_t fill, bool stacke
 }
 
 static M5Canvas* getCover(int a, int size);
-// The album's cover at the top of the card and its name below (or the shelf's picture
-// when there's no cover).
-static void drawAlbumCard(int a, int trackCount) {
+// An album: its cover at the top of the card and its name below (or the shelf's picture
+// when there's no cover), on a color picked from the cover.
+static constexpr int AC_COVER = 74;
+static void drawAlbumCard(int a, int x, int y, int w, int h) {
   auto& d = M5.Display;
-  d.fillRect(0, 0, COL_X - 4, 240, C_BG);
-  M5Canvas* cv = getCover(a, CARD_COVER);  // loads the cover first, which also picks its tint
+  M5Canvas* cv = getCover(a, AC_COVER);  // loads the cover first, which also picks its tint
   uint16_t fill = albumTint(a);
-  drawCardFrame(CARD_X, CARD_Y, CARD_W, CARD_H, fill, trackCount > 1);
-  int cx = CARD_X + CARD_W / 2, top;
+  drawCardFrame(x, y, w, h, fill, true);
+  int cx = x + w / 2, top;
   if (cv) {
-    cv->pushSprite(&d, cx - CARD_COVER / 2, CARD_Y + 10, COVER_KEY);
-    top = CARD_Y + 10 + CARD_COVER + 4;
+    cv->pushSprite(&d, cx - AC_COVER / 2, y + 8, COVER_KEY);
+    top = y + 8 + AC_COVER + 3;
   } else {
-    drawShelfIcon(albumKind(a), cx, CARD_Y + 64, C_WHITE, fill);
-    top = CARD_Y + 112;
+    drawShelfIcon(albumKind(a), cx, y + 48, C_WHITE, fill);
+    top = y + 90;
   }
-  int bottom = CARD_Y + CARD_H - 10;
-  drawTitle(albums[a].name, cx, (top + bottom) / 2, CARD_W - 20, bottom - top, C_WHITE, true);
+  int bottom = y + h - 8;
+  drawTitle(albums[a].name, cx, (top + bottom) / 2, w - 14, bottom - top, C_WHITE, true);
 }
 
-// ----- sleep timer (books and podcasts) -----
-// Tap the chip: off -> 15 -> 30 -> 45 -> 60 -> off. When it runs out, the sound fades
-// over 20 s and pauses.
-static uint32_t sleepTimerEnd = 0, fadeStart = 0;  // millis; 0 = off
-static constexpr uint32_t FADE_MS = 20000;
-static const uint8_t SLEEP_STEPS[] = {15, 30, 45, 60};
+// Something's loaded: the Playing button has somewhere to go.
+static bool haveNowPlaying() { return current >= 0 && !tracks.empty(); }
 
-static int sleepMinutesLeft() {
-  return sleepTimerEnd ? std::max<int32_t>(1, ((int32_t)(sleepTimerEnd - millis()) + 59999) / 60000) : 0;
+// ----- the strip of button icons -----
+static void iconBack(int x, int y, uint16_t c) {
+  M5.Display.fillTriangle(x - 10, y, x - 2, y - 8, x - 2, y + 8, c);
+  M5.Display.fillRect(x - 3, y - 2, 13, 5, c);
+}
+static void iconHome(int x, int y, uint16_t c, uint16_t bg) {
+  M5.Display.fillTriangle(x - 11, y - 1, x, y - 9, x + 11, y - 1, c);
+  M5.Display.fillRect(x - 7, y - 1, 15, 9, c);
+  M5.Display.fillRect(x - 2, y + 3, 5, 5, bg);  // the door
 }
 
-static void cycleSleepTimer() {
-  int cur = sleepMinutesLeft(), next = 0;
-  for (uint8_t s : SLEEP_STEPS) if (s > cur) { next = s; break; }
-  sleepTimerEnd = next ? millis() + next * 60000UL : 0;
-  if (fadeStart) { fadeStart = 0; applyVolume(); }  // tapped during the fade: back to normal
-}
-
-static void drawSleepChip() {
+// `here` lights up the icon for the place that's showing: 1 home (shelves), 2 the player.
+static void drawStrip(int here) {
   auto& d = M5.Display;
-  int x = COL_X + 8, w = COL_W - 16, h = 28;
-  d.fillRect(x, S_CHIP_Y - 2, w, h + 6, C_BG);
-  bool on = sleepTimerEnd || fadeStart;
-  d.fillRoundRect(x, S_CHIP_Y, w, h, h / 2, on ? rgb(70, 60, 130) : C_ROW);
-  iconMoon(x + 20, S_CHIP_Y + h / 2, 8, on ? C_YELLOW : C_DIM, on ? rgb(70, 60, 130) : C_ROW);
-  d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextDatum(middle_left);
-  d.setTextColor(on ? C_WHITE : C_DIM);
-  d.drawString(fadeStart ? String("Goodnight...") : sleepTimerEnd ? "Stop in " + String(sleepMinutesLeft()) : String("Sleep timer"),
-               x + 36, S_CHIP_Y + h / 2 + 1);
+  uint16_t lit = rgb(35, 42, 85);
+  d.fillRect(0, 0, 320, STRIP_H, C_BAR);
+  if (here >= 0) d.fillRoundRect(STRIP_X[here] - 26, -6, 52, STRIP_H + 6, 6, lit);
+  int cy = STRIP_H / 2;
+  iconBack(STRIP_X[0], cy, C_WHITE);
+  iconHome(STRIP_X[1], cy, C_WHITE, here == 1 ? lit : C_BAR);
+  iconPlaying(STRIP_X[2], cy, haveNowPlaying() ? C_GREEN : C_OFF);
+#if CORE2_WIFI
+  iconWifi(306, 3, webUp ? C_WHITE : C_DIM);  // WiFi mode: the web page is (or isn't) up
+#endif
 }
 
-static void drawSnack();
-static bool snackUp();
-static void serviceSleepTimer() {
-  uint32_t now = millis();
-  if (sleepTimerEnd && (int32_t)(now - sleepTimerEnd) >= 0) { sleepTimerEnd = 0; fadeStart = now; dirtyNow = true; }
-  static uint32_t lastFade = 0;
-  if (!fadeStart || now - lastFade < 250) return;
-  lastFade = now;
-  uint32_t t = now - fadeStart;
-  if (t >= FADE_MS) {  // done: pause, and put the normal volume back for next time
-    fadeStart = 0;
-    if (musicIsPlaying()) togglePause();
-    applyVolume();
-    dirtyNow = true;
-  } else {
-    uint8_t v = volume * (FADE_MS - t) / FADE_MS;
-    M5.Speaker.setVolume(v);
-#if !CORE2_WIFI
-    a2dp.set_volume(v / 2);
-#endif
+// ----- volume -----
+// The volume button on the player shows the level as 5 little bars; tapping it opens 5
+// big bars to pick from (each a whole column to hit). The top step is the grown-ups'
+// limit. Picking closes the panel; so does a tap outside it, or 5 s without a tap.
+static uint32_t volPanelUntil = 0;  // panel open until
+static constexpr int VL_X = 10, VL_Y = 28, VL_W = 300, VL_H = 184, VL_COL_X0 = 24, VL_STEP = 56, VL_COL_W = 52;
+static constexpr int VL_COL_Y = VL_Y + 34, VL_BASE = VL_Y + VL_H - 14;
+
+static int volStep() { return (volLevel + 1) / 2; }  // 0..5 from volLevel's 0..10
+
+static void drawVolumeButton() {
+  auto& d = M5.Display;
+  d.fillRoundRect(VB_X, VB_Y + 3, VB_W, VB_H, 14, C_SHADE);
+  d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, 14, C_OFF);
+  int cy = VB_Y + VB_H / 2;
+  iconSpeaker(VB_X + 18, cy, C_WHITE);
+  for (int i = 0; i < 5; i++) {
+    int bh = 6 + i * 4;
+    d.fillRoundRect(VB_X + 32 + i * 9, cy + 11 - bh, 6, bh, 2, i < volStep() ? C_YELLOW : rgb(74, 81, 128));
   }
+}
+
+static void drawVolumeLevels() {
+  auto& d = M5.Display;
+  for (int i = 0; i < 5; i++) {
+    int x = VL_COL_X0 + i * VL_STEP, bh = 34 + i * 24;
+    bool here = i == volStep() - 1;
+    d.fillRoundRect(x, VL_COL_Y, VL_COL_W, VL_BASE + 8 - VL_COL_Y, 12, here ? rgb(58, 65, 112) : C_PANEL);
+    d.fillRoundRect(x + 8, VL_BASE - bh + 4, 36, bh, 10, C_SHADE);
+    d.fillRoundRect(x + 8, VL_BASE - bh, 36, bh, 10, i < volStep() ? C_YELLOW : C_OFF);
+  }
+}
+
+static void openVolume() {
+  auto& d = M5.Display;
+  volPanelUntil = millis() + 5000;
+  d.fillRoundRect(VL_X, VL_Y + 4, VL_W, VL_H, 18, C_SHADE);
+  d.fillRoundRect(VL_X, VL_Y, VL_W, VL_H, 18, C_PANEL);
+  d.drawRoundRect(VL_X, VL_Y, VL_W, VL_H, 18, C_OFF);
+  iconSpeaker(VL_X + 26, VL_Y + 18, C_WHITE);
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  d.setTextDatum(middle_left);
+  d.setTextColor(C_WHITE);
+  d.drawString("Volume", VL_X + 42, VL_Y + 19);
+  drawVolumeLevels();
+}
+
+static void closeVolume() {
+  volPanelUntil = 0;
+  dirtyAll = true;  // repaint whatever was underneath
+}
+
+static void handleVolume(const m5::touch_detail_t& t) {
+  if (!t.wasClicked()) return;
+  for (int i = 0; i < 5; i++) {
+    int x = VL_COL_X0 + i * VL_STEP;
+    if (t.x < x - 2 || t.x >= x + VL_COL_W + 2 || t.y < VL_COL_Y - 24 || t.y >= VL_Y + VL_H) continue;
+    buzz();
+    setVolLevel((i + 1) * 2);
+    prefs.putUChar("lvl", volLevel);
+    drawVolumeLevels();
+    if (!btConnected && !musicIsPlaying()) M5.Speaker.tone(660, 150, 1, true);  // so they hear how loud
+    volPanelUntil = millis() + 700;  // a moment to see the pick, then close
+    return;
+  }
+  if (t.x < VL_X || t.x >= VL_X + VL_W || t.y < VL_Y || t.y >= VL_Y + VL_H) closeVolume();  // tapped outside
 }
 
 // ----- player -----
 static bool storyMode() { return isResumable(playAlbum); }
-static int progY() { return storyMode() ? S_PROG_Y : M_PROG_Y; }
-static bool seekDragging = false;  // a finger is on the progress bar
-
-static void drawProgressAt(int p) {  // p: knob offset into the bar, 0..PROG_W
-  auto& d = M5.Display;
-  int y = progY();
-  p = constrain(p, 0, PROG_W);
-  d.fillRect(PROG_X - 11, y - 6, PROG_W + 22, PROG_H + 12, C_BG);
-  d.fillRoundRect(PROG_X, y, PROG_W, PROG_H, PROG_H / 2, C_OFF);
-  if (p > 0) d.fillRoundRect(PROG_X, y, std::max(p, PROG_H), PROG_H, PROG_H / 2, albumTint(playAlbum));
-  d.fillCircle(PROG_X + p, y + PROG_H / 2, seekDragging ? 10 : 9, C_WHITE);
-}
-
-static void drawProgress() {
-  if (seekDragging) return;  // the finger's preview wins
-  uint32_t start = trackAudioStart, size = file ? file->getSize() : 0;
-  drawProgressAt(file && size > start ? (int64_t)PROG_W * (file->getPos() - std::min(file->getPos(), start)) / (size - start) : 0);
-}
 
 // "12 min left" in this chapter or episode, from the file size and its bitrate.
 static void drawTimeLeft(bool force) {
@@ -2417,99 +2421,72 @@ static void drawTimeLeft(bool force) {
   if (s == shown && !force) return;
   shown = s;
   auto& d = M5.Display;
-  d.fillRect(COL_X, S_LEFT_Y - 9, COL_W, 18, C_BG);
+  d.fillRect(0, P_LEFT_Y - 9, VB_X - 4, 18, C_BG);
   d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextDatum(middle_center);
-  d.setTextColor(C_DIM);
-  d.drawString(s, COL_CX, S_LEFT_Y);
+  d.setTextDatum(middle_left);
+  d.setTextColor(rgb(200, 205, 230));
+  d.drawString(s, 12, P_LEFT_Y);
 }
 
-// One dot per track (up to 16): heard ones white, this one ringed.
-static void drawTrackDots() {
-  auto& d = M5.Display;
-  d.fillRect(COL_X, M_DOTS_Y - 8, COL_W, 17, C_BG);
-  int n = tracks.size();
-  if (n < 2 || n > 16) return;
-  int step = std::min(14, (COL_W - 12) / (n - 1)), x0 = COL_CX - (n - 1) * step / 2;
-  for (int i = 0; i < n; i++) {
-    int x = x0 + i * step;
-    if (i == current) { d.fillCircle(x, M_DOTS_Y, 6, C_WHITE); d.fillCircle(x, M_DOTS_Y, 4, albumTint(playAlbum)); }
-    else d.fillCircle(x, M_DOTS_Y, 4, i < current ? C_WHITE : C_OFF);
-  }
-}
-
-static void drawPlayButton(int cy) {
-  drawRound(B_PLAY.x, cy, B_PLAY.r, C_GREEN);
-  if (paused || tracks.empty()) iconPlay(B_PLAY.x, cy, 24, C_WHITE);
-  else iconPause(B_PLAY.x, cy, 22, C_WHITE);
-}
-
-static void drawControls() {
-  M5.Display.fillRect(COL_X - 2, M_CTRL_Y - B_PLAY.r - 2, COL_W + 4, B_PLAY.r * 2 + 8, C_BG);
-  drawRound(B_PREV.x, M_CTRL_Y, B_PREV.r, C_BLUE);
-  iconSkip(B_PREV.x, M_CTRL_Y, 20, false, C_WHITE);
-  drawPlayButton(M_CTRL_Y);
-  drawRound(B_NEXT.x, M_CTRL_Y, B_NEXT.r, C_BLUE);
-  iconSkip(B_NEXT.x, M_CTRL_Y, 20, true, C_WHITE);
+static void drawPlayButton() {
+  drawRound(B_PLAY.x, P_CTRL_Y, B_PLAY.r, C_GREEN);
+  if (paused || tracks.empty()) iconPlay(B_PLAY.x, P_CTRL_Y, 32, C_WHITE);
+  else iconPause(B_PLAY.x, P_CTRL_Y, 30, C_WHITE);
 }
 
 // Back 15 s / ahead 30 s: a little rewind or fast-forward mark over the seconds.
 static void drawSkipSecButton(const RoundButton& b, bool fwd, int secs) {
   auto& d = M5.Display;
-  drawRound(b.x, S_CTRL_Y, b.r, C_BLUE);
-  iconSkip(b.x, S_CTRL_Y - 6, 12, fwd, C_WHITE);
-  d.setFont(&fonts::FreeSansBold9pt7b);
+  drawRound(b.x, P_CTRL_Y, b.r, C_BLUE);
+  iconSkip(b.x, P_CTRL_Y - 9, 16, fwd, C_WHITE);
+  d.setFont(&fonts::FreeSansBold12pt7b);
   d.setTextDatum(middle_center);
   d.setTextColor(C_WHITE);
-  d.drawString(String(secs), b.x, S_CTRL_Y + 8);
+  d.drawString(String(secs), b.x, P_CTRL_Y + 10);
 }
 
-static void drawStoryControls() {
-  M5.Display.fillRect(COL_X - 2, S_CTRL_Y - B_PLAY.r - 2, COL_W + 4, B_PLAY.r * 2 + 8, C_BG);
-  drawSkipSecButton(B_PREV, false, 15);
-  drawPlayButton(S_CTRL_Y);
-  drawSkipSecButton(B_NEXT, true, 30);
-}
-
-// Header: back, "3 of 12", volume.
-static void drawPlayerHeader() {
-  auto& d = M5.Display;
-  d.fillRect(COL_X - 2, 0, 322 - COL_X, HEAD_CY + HEAD_R + 6, C_BG);
-  drawBackButton(BACK_X, HEAD_CY);
-  drawVolumeButton(VOLB_X, HEAD_CY);
-  d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextDatum(middle_center);
-  d.setTextColor(C_DIM);
-  d.drawString(String(current + 1) + " of " + String(tracks.size()), COL_CX, HEAD_CY);
-}
-
-static void drawPlayerRight() {
-  M5.Display.fillRect(COL_X - 4, 0, 324 - COL_X, 240, C_BG);
-  drawPlayerHeader();
-  bool story = storyMode();
-  drawTitle(title, COL_CX, story ? S_TITLE_CY : M_TITLE_CY, COL_W - 4, story ? S_TITLE_H : M_TITLE_H, C_WHITE);
-  drawProgress();
-  if (story) {
-    drawTimeLeft(true);
-    drawStoryControls();
-    drawSleepChip();
+static void drawControls() {
+  M5.Display.fillRect(0, P_CTRL_Y - B_PLAY.r - 3, 320, B_PLAY.r * 2 + 10, C_BG);
+  if (storyMode()) {
+    drawSkipSecButton(B_PREV, false, 15);
+    drawSkipSecButton(B_NEXT, true, 30);
   } else {
-    drawTrackDots();
-    drawControls();
+    drawRound(B_PREV.x, P_CTRL_Y, B_PREV.r, C_BLUE);
+    iconSkip(B_PREV.x, P_CTRL_Y, 28, false, C_WHITE);
+    drawRound(B_NEXT.x, P_CTRL_Y, B_NEXT.r, C_BLUE);
+    iconSkip(B_NEXT.x, P_CTRL_Y, 28, true, C_WHITE);
   }
+  drawPlayButton();
+}
+
+// The album (or "Chapter 3 of 22"), how long is left for books and podcasts, the title,
+// and the volume button.
+static void drawPlayerInfo() {
+  auto& d = M5.Display;
+  d.fillRect(0, STRIP_H, 320, P_CTRL_Y - B_PLAY.r - 3 - STRIP_H, C_BG);
+  bool story = storyMode();
+  String n = String(current + 1) + " of " + String(tracks.size());
+  String sub = story && albumKind(playAlbum) == ShelfKind::Books ? "Chapter " + n : albumName() + " - " + n;
+  d.setFont(&fonts::FreeSansBold9pt7b);
+  d.setTextDatum(middle_left);
+  d.setTextColor(C_DIM);
+  d.drawString(fitLine(sub, VB_X - 20), 12, P_SUB_Y);
+  if (story) drawTimeLeft(true);
+  drawVolumeButton();
+  drawTitle(title, 160, P_TITLE_CY, 296, P_TITLE_H, C_WHITE);
 }
 
 static void drawPlayer() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
-  cardAlbumShown = playAlbum;
+  drawStrip(2);
   if (tracks.empty()) {
-    d.fillRoundRect(16, 40, 288, 160, 18, C_OFF);
-    drawTitle("No songs yet! Ask a grown-up to add some.", 160, 120, 260, 140, C_WHITE);
+    d.fillRoundRect(16, 44, 288, 160, 18, C_OFF);
+    drawTitle("No songs yet! Ask a grown-up to add some.", 160, 124, 260, 140, C_WHITE);
     return;
   }
-  drawAlbumCard(playAlbum, tracks.size());
-  drawPlayerRight();
+  drawPlayerInfo();
+  drawControls();
 }
 
 // Skips by seconds (books and podcasts), using the bitrate to turn seconds into bytes.
@@ -2520,102 +2497,6 @@ static void skipSeconds(int secs) {
   forceStartPos = (uint32_t)std::max(lo, std::min(pos, std::max(lo, hi)));
   recoverTries = 0;
   playTrack(current);
-}
-
-// ----- How loud? -----
-// The speaker button opens three big choices: a mouse (quiet), a cat and a lion (loud).
-// "Loud" is the grown-ups' volume limit. Picking one closes the panel; so does a tap
-// outside it, or 5 s without a tap.
-static uint32_t loudUntil = 0;  // panel open until
-static constexpr int LP_X = 12, LP_Y = 26, LP_W = 296, LP_H = 188, LB_Y = 66, LB_W = 86, LB_H = 128;
-static const int LB_X[3] = {23, 117, 211};
-static const uint8_t LOUD_LEVEL[3] = {3, 6, 10};  // of volLevel's 10
-
-static int loudPick() { return volLevel <= 4 ? 0 : volLevel <= 7 ? 1 : 2; }
-
-static void drawMouse(int cx, int cy) {
-  auto& d = M5.Display;
-  uint16_t fur = rgb(170, 172, 190), pink = rgb(255, 150, 170);
-  for (int s = -1; s <= 1; s += 2) { d.fillCircle(cx + s * 17, cy - 15, 12, fur); d.fillCircle(cx + s * 17, cy - 15, 7, pink); }
-  d.fillCircle(cx, cy + 3, 20, fur);
-  d.fillCircle(cx - 7, cy - 1, 3, C_SHADE);
-  d.fillCircle(cx + 7, cy - 1, 3, C_SHADE);
-  d.fillCircle(cx, cy + 10, 4, pink);
-  for (int s = -1; s <= 1; s += 2) { d.drawLine(cx + s * 6, cy + 11, cx + s * 24, cy + 7, C_SHADE); d.drawLine(cx + s * 6, cy + 13, cx + s * 24, cy + 15, C_SHADE); }
-}
-static void drawCat(int cx, int cy) {
-  auto& d = M5.Display;
-  uint16_t fur = rgb(255, 160, 60), pink = rgb(255, 150, 170);
-  for (int s = -1; s <= 1; s += 2) d.fillTriangle(cx + s * 21, cy - 4, cx + s * 17, cy - 28, cx + s * 3, cy - 15, fur);
-  d.fillCircle(cx, cy + 2, 20, fur);
-  d.fillEllipse(cx - 8, cy - 2, 3, 4, C_SHADE);
-  d.fillEllipse(cx + 8, cy - 2, 3, 4, C_SHADE);
-  d.fillTriangle(cx - 4, cy + 6, cx + 4, cy + 6, cx, cy + 10, pink);
-  for (int s = -1; s <= 1; s += 2) { d.drawLine(cx + s * 7, cy + 10, cx + s * 26, cy + 6, C_WHITE); d.drawLine(cx + s * 7, cy + 12, cx + s * 26, cy + 15, C_WHITE); }
-}
-static void drawLion(int cx, int cy) {
-  auto& d = M5.Display;
-  uint16_t mane = rgb(200, 100, 30), face = rgb(255, 200, 80);
-  d.fillCircle(cx, cy + 1, 29, mane);
-  for (int s = -1; s <= 1; s += 2) d.fillCircle(cx + s * 13, cy - 14, 6, face);
-  d.fillCircle(cx, cy + 3, 18, face);
-  d.fillCircle(cx - 7, cy - 1, 3, C_SHADE);
-  d.fillCircle(cx + 7, cy - 1, 3, C_SHADE);
-  d.fillTriangle(cx - 5, cy + 6, cx + 5, cy + 6, cx, cy + 11, rgb(110, 50, 20));
-  d.drawLine(cx, cy + 11, cx, cy + 15, rgb(110, 50, 20));
-  d.drawLine(cx - 6, cy + 16, cx + 6, cy + 16, rgb(110, 50, 20));
-}
-
-static void drawLoudChoice(int i) {
-  auto& d = M5.Display;
-  static const char* NAMES[3] = {"Quiet", "Medium", "Loud"};
-  int x = LB_X[i];
-  bool on = i == loudPick();
-  d.fillRoundRect(x - 3, LB_Y - 3, LB_W + 6, LB_H + 9, 17, C_PANEL);
-  d.fillRoundRect(x, LB_Y + 3, LB_W, LB_H, 14, C_SHADE);
-  d.fillRoundRect(x, LB_Y, LB_W, LB_H, 14, on ? C_YELLOW : C_ROW);
-  d.fillRoundRect(x + 3, LB_Y + 3, LB_W - 6, LB_H - 6, 12, on ? rgb(58, 65, 112) : C_ROW);
-  int cx = x + LB_W / 2, cy = LB_Y + 50;
-  if (i == 0) drawMouse(cx, cy);
-  else if (i == 1) drawCat(cx, cy);
-  else drawLion(cx, cy);
-  d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextDatum(middle_center);
-  d.setTextColor(C_WHITE);
-  d.drawString(NAMES[i], cx, LB_Y + LB_H - 18);
-}
-
-static void openLoudness() {
-  auto& d = M5.Display;
-  loudUntil = millis() + 5000;
-  d.fillRoundRect(LP_X, LP_Y + 4, LP_W, LP_H, 18, C_SHADE);
-  d.fillRoundRect(LP_X, LP_Y, LP_W, LP_H, 18, C_PANEL);
-  d.drawRoundRect(LP_X, LP_Y, LP_W, LP_H, 18, C_OFF);
-  d.setFont(&fonts::FreeSansBold12pt7b);
-  d.setTextDatum(middle_center);
-  d.setTextColor(C_WHITE);
-  d.drawString("How loud?", 160, LP_Y + 20);
-  for (int i = 0; i < 3; i++) drawLoudChoice(i);
-}
-
-static void closeLoudness() {
-  loudUntil = 0;
-  dirtyAll = true;  // repaint whatever was underneath
-}
-
-static void handleLoudness(const m5::touch_detail_t& t) {
-  if (!t.wasClicked()) return;
-  for (int i = 0; i < 3; i++) {
-    if (t.x < LB_X[i] - 4 || t.x >= LB_X[i] + LB_W + 4 || t.y < LB_Y - 4 || t.y >= LB_Y + LB_H + 4) continue;
-    buzz();
-    setVolLevel(LOUD_LEVEL[i]);
-    prefs.putUChar("lvl", volLevel);
-    for (int k = 0; k < 3; k++) drawLoudChoice(k);
-    if (!btConnected && !musicIsPlaying()) M5.Speaker.tone(660, 150, 1, true);  // so they hear how loud
-    loudUntil = millis() + 700;  // a moment to see the pick, then close
-    return;
-  }
-  if (t.x < LP_X || t.x >= LP_X + LP_W || t.y < LP_Y || t.y >= LP_Y + LP_H) closeLoudness();  // tapped outside
 }
 
 // ----- snackbars -----
@@ -2664,7 +2545,7 @@ static void drawSnack() {
 static void serviceSnack() {
   uint32_t now = millis();
   if (snackUp() && (int32_t)(now - snackUntil) >= 0) { snackShown = Snack::None; dirtyAll = true; }
-  if (snackPending == Snack::None || snackUp() || dimmed || loudUntil || screen == Screen::Grownups) return;
+  if (snackPending == Snack::None || snackUp() || dimmed || volPanelUntil || screen == Screen::Grownups) return;
   if (now - snackPendingAt > 60000) { snackPending = Snack::None; return; }  // old news
   snackShown = snackPending;
   snackPending = Snack::None;
@@ -2699,24 +2580,18 @@ static void watchPower() {
   wasUsb = usb;
 }
 
-// Something's loaded: a way back to it from the library screens.
-static bool haveNowPlaying() { return current >= 0 && !tracks.empty(); }
-
 // ----- albums -----
-// A header naming the shelf ("< Music"; tap it to go back), then square tiles 3 across
-// and 2 down. The cover fills the tile; without one, the album name sits on the album's
-// color. The playing album gets a ring and a badge, podcasts with new episodes a dot.
-// The green button at the right of the header goes to the player.
-static constexpr int AL_HEAD_Y = 3, AL_HEAD_H = 28, TILE = 90, TILE_GAP_X = 15, TILE_GAP_Y = 8, TILES = 6;
-static constexpr int GRID_X = 10, GRID_Y = AL_HEAD_Y + AL_HEAD_H + 8;
-static constexpr int NP_X = 296;  // now-playing button in the header
+// The shelf's name and page dots, then three tall album cards; swipe sideways for more.
+// The playing album gets a ring and a badge, podcasts with new episodes a dot.
+static constexpr int AL_HEAD_CY = STRIP_H + 14, AL_CARD_Y = STRIP_H + 28, AL_CARD_W = 90, AL_CARD_H = 180;
+static constexpr int AL_GAP = 13, AL_X0 = 12, TILES = 3;
 
 static int viewShelf = 0;
 static std::vector<int> shelfAlbums;  // indexes into albums for viewShelf
 static int albumPages() { return std::max<int>(1, (shelfAlbums.size() + TILES - 1) / TILES); }
 
 static void showScreen(Screen s);
-// Opens a shelf's album grid on the page holding `focus` (an album index), if it's there.
+// Opens a shelf's albums on the page holding `focus` (an album index), if it's there.
 static void openShelf(int sh, int focus) {
   viewShelf = shelves.empty() ? 0 : constrain(sh, 0, (int)shelves.size() - 1);
   shelfAlbums.clear();
@@ -2727,74 +2602,61 @@ static void openShelf(int sh, int focus) {
   showScreen(Screen::Albums);
 }
 
-static void drawNowPlayingButton(int x, int y) {
-  drawRound(x, y, 13, C_GREEN);
-  iconPlaying(x, y, C_WHITE);
-}
-
 static void drawAlbums() {
   auto& d = M5.Display;
   albumsPage = constrain(albumsPage, 0, albumPages() - 1);  // albums may have been deleted
   d.fillScreen(C_BG);
-  int hc = AL_HEAD_Y + AL_HEAD_H / 2;
-  bool canGoBack = shelves.size() > 1;
-  d.fillRoundRect(6, AL_HEAD_Y, 308, AL_HEAD_H, 10, shelves.empty() ? C_BLUE : shelfColor(shelves[viewShelf]));
-  if (canGoBack) iconArrow(20, hc, 0, C_WHITE);
+  drawStrip(shelves.size() > 1 ? -1 : 1);  // with one shelf, this is home
   d.setFont(&fonts::FreeSansBold12pt7b);
   d.setTextDatum(middle_left);
   d.setTextColor(C_WHITE);
-  d.drawString(shelves.empty() ? String("Music") : shelves[viewShelf].name, canGoBack ? 36 : 16, hc);
-  int pages = albumPages(), dotsRight = haveNowPlaying() ? NP_X - 22 : 302;
-  for (int p = 0; p < pages && pages > 1 && p < 10; p++)
-    d.fillCircle(dotsRight - (std::min(pages, 10) - 1 - p) * 11, hc, 3, p == albumsPage ? C_WHITE : rgb(20, 24, 50));  // on the shelf color
-  if (haveNowPlaying()) drawNowPlayingButton(NP_X, hc);
+  d.drawString(shelves.empty() ? String("Music") : shelves[viewShelf].name, AL_X0, AL_HEAD_CY);
+  int pages = albumPages();
+  for (int p = 0; p < pages && pages > 1 && p < 12; p++) {
+    int n = std::min(pages, 12), x = 306 - (n - 1 - p) * 13;
+    if (p == albumsPage) d.fillRoundRect(x - 7, AL_HEAD_CY - 3, 14, 7, 3, C_WHITE);
+    else d.fillCircle(x, AL_HEAD_CY, 3, rgb(74, 81, 128));
+  }
   for (int k = 0; k < TILES; k++) {
     int slot = albumsPage * TILES + k;
     if (slot >= (int)shelfAlbums.size()) break;
     int a = shelfAlbums[slot];
-    int x = GRID_X + (k % 3) * (TILE + TILE_GAP_X), y = GRID_Y + (k / 3) * (TILE + TILE_GAP_Y);
+    int x = AL_X0 + k * (AL_CARD_W + AL_GAP), y = AL_CARD_Y;
     if (a == playAlbum)
-      for (int t = 2; t <= 3; t++) d.drawRoundRect(x - t, y - t, TILE + 2 * t, TILE + 2 * t, 11 + t, C_WHITE);
-    if (M5Canvas* cv = getCover(a, TILE)) {
-      cv->pushSprite(&d, x, y, COVER_KEY);
-    } else {
-      d.fillRoundRect(x, y, TILE, TILE, TILE / 8, albumColor(a));
-      drawTitle(albums[a].name, x + TILE / 2, y + TILE / 2, TILE - 8, TILE - 10, C_WHITE, true);
-    }
+      for (int t = 2; t <= 3; t++) d.drawRoundRect(x - t - 1, y - t - 1, AL_CARD_W + 2 * t + 2, AL_CARD_H + 2 * t + 2, 14 + t, C_WHITE);
+    drawAlbumCard(a, x, y, AL_CARD_W, AL_CARD_H);
     if (a == playAlbum) {
-      d.fillCircle(x + TILE - 14, y + TILE - 14, 12, C_GREEN);
-      iconPlaying(x + TILE - 14, y + TILE - 14, C_WHITE);
+      d.fillCircle(x + AL_CARD_W - 17, y + AL_CARD_H - 17, 12, C_GREEN);
+      iconPlaying(x + AL_CARD_W - 17, y + AL_CARD_H - 17, C_WHITE);
     }
     if (albums[a].newCount > 0) {  // new podcast episodes
-      d.fillCircle(x + 13, y + 13, 9, C_SHADE);
-      d.fillCircle(x + 13, y + 13, 7, C_YELLOW);
+      d.fillCircle(x + 14, y + 14, 9, C_SHADE);
+      d.fillCircle(x + 14, y + 14, 7, C_YELLOW);
     }
   }
 }
 
-// ----- shelves: the library's top level -----
+// ----- shelves: the library's top level (Home) -----
 // Tall cards for Music, Podcasts, Books and any other shelf (a 3 x 2 grid past three),
-// each with a picture and a count; Podcasts shows how many episodes are new. Below,
-// a green bar goes back to whatever is playing.
-static constexpr int SH_NP_Y = 210, SH_NP_H = 26;
-
+// each with a picture and a count; Podcasts shows how many episodes are new.
 static void shelfTileRect(int i, int& x, int& y, int& w, int& h) {
   int n = shelves.size();
   if (n <= 3) {  // one row of tall cards
     w = (304 - (n - 1) * 10) / std::max(1, n);
     h = 196;
     x = 8 + i * (w + 10);
-    y = 4;
+    y = STRIP_H + 6;
   } else {       // 3 x 2 grid
-    w = 96; h = 96;
+    w = 96; h = 94;
     x = 10 + (i % 3) * 104;
-    y = 4 + (i / 3) * 102;
+    y = STRIP_H + 6 + (i / 3) * 102;
   }
 }
 
 static void drawShelves() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
+  drawStrip(1);
   for (int i = 0; i < (int)shelves.size() && i < 6; i++) {
     const Shelf& sh = shelves[i];
     int x, y, w, h;
@@ -2822,24 +2684,10 @@ static void drawShelves() {
       d.drawString(n, x + w - 8 - bw / 2, y + 21);
     }
   }
-  if (haveNowPlaying()) {  // back to the player
-    int x = 50, w = 220;
-    d.fillRoundRect(x, SH_NP_Y + 3, w, SH_NP_H, SH_NP_H / 2, C_SHADE);
-    d.fillRoundRect(x, SH_NP_Y, w, SH_NP_H, SH_NP_H / 2, C_GREEN);
-    iconPlaying(x + 20, SH_NP_Y + SH_NP_H / 2, C_WHITE);
-    d.setFont(&fonts::FreeSansBold9pt7b);
-    d.setTextDatum(middle_left);
-    d.setTextColor(C_WHITE);
-    d.drawString(fitLine(title, w - 46), x + 36, SH_NP_Y + SH_NP_H / 2 + 1);
-  }
-#if CORE2_WIFI
-  iconWifi(302, SH_NP_Y + 2, webUp ? C_WHITE : C_DIM);  // WiFi mode: the web page is (or isn't) up
-#endif
 }
 
 static void handleShelves(const m5::touch_detail_t& t) {
   if (!t.wasClicked()) return;
-  if (haveNowPlaying() && t.y >= SH_NP_Y - 6 && t.x >= 44 && t.x < 276) { buzz(); showScreen(Screen::Player); return; }
   for (int i = 0; i < (int)shelves.size() && i < 6; i++) {
     int x, y, w, h;
     shelfTileRect(i, x, y, w, h);
@@ -2851,14 +2699,15 @@ static void handleShelves(const m5::touch_detail_t& t) {
   }
 }
 
-// ----- tracks -----
-// The album's card on the left (tap it to play, or to go to the player if it's playing);
-// on the right, back and the count, then the songs as rows. Swipe up/down to scroll,
-// right to go back. Songs: one-line rows (two smaller lines for long titles).
-// Podcast episodes: taller rows with a date badge.
-static constexpr int TL_X = COL_X - 4, TL_W = 312 - TL_X - 6, TL_Y = HEAD_CY + HEAD_R + 8;
-static int trRowH() { return isPodcastAlbum(viewAlbum) ? 60 : 32; }
-static int trRows() { return isPodcastAlbum(viewAlbum) ? 3 : 6; }
+// ----- songs -----
+// A header with a small cover, the album's name and a big Play button (from the start,
+// or for books and podcasts where they stopped), then the songs as full-width rows.
+// Swipe up/down to scroll, right to go back. Songs: one-line rows (two smaller lines
+// for long titles). Podcast episodes: taller rows with a date badge.
+static constexpr int TH_CY = STRIP_H + 24, TL_Y = STRIP_H + 48, TL_X = 8, TL_W = 298;
+static constexpr int PLAY_ALL_X = 288, PLAY_ALL_R = 19;
+static int trRowH() { return isPodcastAlbum(viewAlbum) ? 58 : 34; }
+static int trRows() { return isPodcastAlbum(viewAlbum) ? 3 : 5; }
 
 static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown in the list
 
@@ -2900,18 +2749,25 @@ static void drawProgressMark(int i, int x0, int x1, int y, int h, bool playing) 
 static void drawTracks() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
-  drawAlbumCard(viewAlbum, viewTracks.size());
-  drawBackButton(BACK_X, HEAD_CY);
-  bool podcast = isPodcastAlbum(viewAlbum);
-  ShelfKind kind = albumKind(viewAlbum);
-  int n = viewTracks.size();
-  const char* noun = podcast ? "episode" : kind == ShelfKind::Books ? "chapter" : "song";
-  d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextDatum(middle_left);
-  d.setTextColor(C_DIM);
-  d.drawString(String(n) + " " + noun + (n == 1 ? "" : "s"), BACK_X + HEAD_R + 10, HEAD_CY);
-  int rowH = trRowH(), rows = trRows();
+  drawStrip(-1);
   uint16_t ac = albumTint(viewAlbum);
+  if (M5Canvas* cv = getCover(viewAlbum, 36)) cv->pushSprite(&d, 10, TH_CY - 18, COVER_KEY);
+  else d.fillRoundRect(10, TH_CY - 18, 36, 36, 6, ac);
+  bool podcast = isPodcastAlbum(viewAlbum);
+  int n = viewTracks.size();
+  const char* noun = podcast ? "episode" : albumKind(viewAlbum) == ShelfKind::Books ? "chapter" : "song";
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  d.setTextDatum(middle_left);
+  d.setTextColor(C_WHITE);
+  d.drawString(fitLine(albums[viewAlbum].name, PLAY_ALL_X - PLAY_ALL_R - 66), 54, TH_CY - 7);
+  d.setFont(&fonts::FreeSansBold9pt7b);
+  d.setTextColor(C_DIM);
+  d.drawString(String(n) + " " + noun + (n == 1 ? "" : "s"), 54, TH_CY + 12);
+  if (n) {
+    drawRound(PLAY_ALL_X, TH_CY, PLAY_ALL_R, C_GREEN);
+    iconPlay(PLAY_ALL_X, TH_CY, 16, C_WHITE);
+  }
+  int rowH = trRowH(), rows = trRows();
   for (int r = 0; r < rows; r++) {
     int i = tracksTop + r;
     if (i >= n) break;
@@ -2922,30 +2778,31 @@ static void drawTracks() {
       String f = viewTracks[i].substring(viewTracks[i].lastIndexOf('/') + 1);
       static const char* MON[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
       int mon = f.length() > 10 && f[4] == '-' ? f.substring(5, 7).toInt() : 0;
-      d.fillRoundRect(TL_X + 4, y + 4, 36, h - 8, 8, playing ? C_WHITE : C_OFF);
+      d.fillRoundRect(TL_X + 4, y + 4, 40, h - 8, 8, playing ? C_WHITE : C_OFF);
       d.setTextDatum(middle_center);
       d.setTextColor(playing ? ac : C_WHITE);
       if (mon >= 1 && mon <= 12) {
         d.setFont(&fonts::DejaVu12);
-        d.drawString(MON[mon - 1], TL_X + 22, my - 9);
+        d.drawString(MON[mon - 1], TL_X + 24, my - 9);
         d.setFont(&fonts::FreeSansBold12pt7b);
-        d.drawString(String(f.substring(8, 10).toInt()), TL_X + 22, my + 9);
+        d.drawString(String(f.substring(8, 10).toInt()), TL_X + 24, my + 9);
       } else {
         d.setFont(&fonts::FreeSansBold12pt7b);
-        d.drawString(String(i + 1), TL_X + 22, my);
+        d.drawString(String(i + 1), TL_X + 24, my);
       }
-      d.setFont(&fonts::DejaVu12);
-      int tx = TL_X + 46, tw = TL_W - 46 - 14;
+      d.setFont(&fonts::FreeSansBold9pt7b);
+      int tx = TL_X + 52, tw = TL_W - 52 - 16;
       auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 3);
-      int lh = 14, ty = my - (int)(lines.size() - 1) * lh / 2;
+      if (lines.size() > 2) { d.setFont(&fonts::DejaVu12); lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 3); }
+      int lh = lines.size() > 2 ? 14 : 17, ty = my - (int)(lines.size() - 1) * lh / 2;
       d.setTextDatum(middle_left);
       d.setTextColor(C_WHITE);
       for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
-      drawProgressMark(i, tx, TL_X + TL_W - 6, y, h, playing);
+      drawProgressMark(i, tx, TL_X + TL_W - 8, y, h, playing);
       continue;
     }
-    int nx = TL_X + 15;
-    d.fillCircle(nx, my, 11, playing ? C_WHITE : C_OFF);
+    int nx = TL_X + 17;
+    d.fillCircle(nx, my, 12, playing ? C_WHITE : C_OFF);
     if (playing) iconPlaying(nx, my, ac);
     else {
       if (n > 99) d.setFont(&fonts::DejaVu9);
@@ -2954,26 +2811,27 @@ static void drawTracks() {
       d.setTextColor(C_WHITE);
       d.drawString(String(i + 1), nx, my);
     }
-    int tx = TL_X + 32, tw = TL_W - 32 - (isResumable(viewAlbum) ? 20 : 6);
+    int tx = TL_X + 38, tw = TL_W - 38 - (isResumable(viewAlbum) ? 22 : 8);
     String name = trackTitle(viewTracks[i], viewAlbum);
-    d.setFont(&fonts::FreeSansBold9pt7b);
+    d.setFont(&fonts::FreeSansBold12pt7b);
     d.setTextDatum(middle_left);
     d.setTextColor(C_WHITE);
+    if (d.textWidth(name) > tw) d.setFont(&fonts::FreeSansBold9pt7b);
     if (d.textWidth(name) <= tw) {
       d.drawString(name, tx, my);
     } else {  // long title: two smaller lines
       d.setFont(&fonts::DejaVu12);
       auto lines = wrapText(name, tw, 2);
-      int lh = 12, ty = my - (int)(lines.size() - 1) * lh / 2;
+      int lh = 13, ty = my - (int)(lines.size() - 1) * lh / 2;
       for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
     }
-    drawProgressMark(i, tx, TL_X + TL_W - 6, y, h, playing);
+    drawProgressMark(i, tx, TL_X + TL_W - 8, y, h, playing);
   }
   if (n > rows) {  // scroll bar
     int trackH = rows * rowH - 4, barH = std::max(16, trackH * rows / n);
     int barY = TL_Y + (trackH - barH) * tracksTop / std::max(1, n - rows);
-    d.fillRoundRect(314, TL_Y, 5, trackH, 2, C_ROW);
-    d.fillRoundRect(314, std::min(barY, TL_Y + trackH - barH), 5, barH, 2, C_DIM);
+    d.fillRoundRect(311, TL_Y, 5, trackH, 2, C_ROW);
+    d.fillRoundRect(311, std::min(barY, TL_Y + trackH - barH), 5, barH, 2, C_DIM);
   }
 }
 
@@ -3033,7 +2891,7 @@ static void nightlyCheck() {
   if (!rtcNow(h, m) || h >= 5) return;
   uint32_t today = todayStamp();
   if (!today || prefs.getUInt("nightdone", 0) == today) return;
-  if (!usbPower() || musicIsPlaying() || sleepTimerEnd || fadeStart) return;
+  if (!usbPower() || musicIsPlaying()) return;
   if (now - lastTouchMs < 10 * 60000UL) return;  // someone's using it
   if (!prefs.isKey("ssid") || !haveFeeds()) { prefs.putUInt("nightdone", today); return; }  // nothing to do tonight
 #if CORE2_WIFI
@@ -3152,10 +3010,8 @@ static void drawStats() {
     xSemaphoreGive(btLock);
     drawStatTile(0, 1, "PLAYING TO", bt, C_BLUE);
 #endif
-    static const char* LOUD[3] = {"Quiet", "Medium", "Loud"};
-    drawStatTile(1, 1, "VOLUME", String(LOUD[loudPick()]) + ", Loud = " + String(maxVolPct) + "%", C_ORANGE);
-    drawStatTile(0, 2, "OWNER", owner.length() ? owner : String("Not set"), C_YELLOW);
-    drawStatTile(1, 2, "SLEEP TIMER", sleepTimerEnd ? String(sleepMinutesLeft()) + " min left" : String("Off"), rgb(138, 80, 236));
+    drawStatTile(1, 1, "VOLUME", String(volStep()) + " of 5 (top = " + String(maxVolPct) + "%)", C_ORANGE);
+    drawStatTile(0, 2, "OWNER", owner.length() ? owner : String("Not set"), C_YELLOW, true);
   } else {  // technical
     const esp_partition_t* run = esp_ota_get_running_partition();
     drawStatTile(0, 0, "CHIP", "ESP32 rev " + String(ESP.getChipRevision()) + ", " + String(ESP.getCpuFreqMHz()) + " MHz", C_DIM);
@@ -3178,7 +3034,7 @@ static void drawGrownupsBody() {
     static const char* const bright[] = {"Dim", "Normal", "Bright"};
     static const char* const off[] = {"15 min", "30 min", "Never"};
     const char* const* opts[GU_ROWS] = {vol, bright, off};
-    static const char* names[GU_ROWS] = {"Loud is", "Screen", "Auto-off"};
+    static const char* names[GU_ROWS] = {"Loudest", "Screen", "Auto-off"};
     int sel[GU_ROWS] = {maxVolPct == 50 ? 0 : maxVolPct == 70 ? 1 : 2, brightIdx, autoOffIdx};
     for (int r = 0; r < GU_ROWS; r++) {
       d.setFont(&fonts::FreeSansBold9pt7b);
@@ -3347,22 +3203,25 @@ static void showScreen(Screen s) {
 }
 
 static void redraw() {
-  if (loudUntil) return;  // the volume panel is up; everything repaints when it closes
+  if (volPanelUntil) return;  // the volume panel is up; everything repaints when it closes
   bool drew = false;
   if (dirtyAll) {
     dirtyAll = false;
+    dirtyNow = false;
     drew = true;
-    if (screen == Screen::Player) { dirtyNow = false; drawPlayer(); }
+    if (screen == Screen::Player) drawPlayer();
     else if (screen == Screen::Albums) drawAlbums();
     else if (screen == Screen::Shelves) drawShelves();
     else if (screen == Screen::Tracks) drawTracks();
     else { drawGrownups(); connectDirty = false; }
   }
-  if (screen == Screen::Player && dirtyNow) {  // new song, pause/play: the right side (and the card if the album changed)
+  if (dirtyNow) {  // new song, pause/play
     dirtyNow = false;
-    drew = true;
-    if (playAlbum != cardAlbumShown) drawPlayer();
-    else drawPlayerRight();
+    if (screen == Screen::Player) {
+      drew = true;
+      if (tracks.empty()) drawPlayer();
+      else { drawPlayerInfo(); drawControls(); }
+    }
   }
   if (screen == Screen::Grownups && connectDirty) {  // Bluetooth news: only that tab shows it
     connectDirty = false;
@@ -3383,37 +3242,41 @@ static bool flickedY(const m5::touch_detail_t& t, int& dir) {
   return true;
 }
 
-static void handlePlayer(const m5::touch_detail_t& t) {
-  if (tracks.empty()) return;
-  static int seekX = 0;
-  bool story = storyMode();
-  int py = progY();
-  bool inSeekZone = t.base_x >= COL_X - 8 && t.base_y >= py - 10 && t.base_y < py + PROG_H + 10 && current >= 0;
-  if (t.isPressed() && inSeekZone) {  // finger on the bar: the knob follows it
-    seekDragging = true;
-    seekX = t.x;
-    drawProgressAt(t.x - PROG_X);
-    return;
-  }
-  if (seekDragging) {  // let go: jump there
-    seekDragging = false;
-    buzz();
-    seekTo((float)(seekX - PROG_X) / PROG_W);
-    return;
-  }
-  int dir;
-  if (!story && t.base_x < COL_X && flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }  // swipe the card
-  if (!t.wasClicked()) return;
-  if (hitAt(BACK_X, HEAD_CY, HEAD_R, t.x, t.y)) { buzz(); openTracks(playAlbum); return; }
-  if (hitAt(VOLB_X, HEAD_CY, HEAD_R, t.x, t.y)) { buzz(); openLoudness(); return; }
-  int cy = story ? S_CTRL_Y : M_CTRL_Y;
-  if (hit(B_PLAY, cy, t.x, t.y)) { buzz(); togglePause(); }
-  else if (hit(B_PREV, cy, t.x, t.y)) { buzz(); if (story) skipSeconds(-15); else playTrack(current - 1); }
-  else if (hit(B_NEXT, cy, t.x, t.y)) { buzz(); if (story) skipSeconds(30); else playTrack(current + 1); }
-  else if (story && t.y >= S_CHIP_Y - 6 && t.y < S_CHIP_Y + 36 && t.x >= COL_X) { buzz(); cycleSleepTimer(); drawSleepChip(); }
+// The three buttons (and their icons along the top).
+// Back: player -> its songs -> the shelf's albums -> the shelves. Home: the shelves (or
+// the albums, with just one shelf). Playing: the player.
+static void goBack() {
+  if (screen == Screen::Player && playAlbum >= 0) openTracks(playAlbum);
+  else if (screen == Screen::Tracks && viewAlbum >= 0) openShelf(albums[viewAlbum].shelf, viewAlbum);
+  else if (screen == Screen::Albums && shelves.size() > 1) showScreen(Screen::Shelves);
+  else if (screen == Screen::Grownups) showScreen(beforeGrownups);
+}
+static void goHome() {
+  if (shelves.size() > 1) showScreen(Screen::Shelves);
+  else openShelf(0, playAlbum);
+}
+static void goPlaying() {
+  if (haveNowPlaying()) showScreen(Screen::Player);
+}
+static void navigate(int which) {
+  buzz();
+  if (which == 0) goBack();
+  else if (which == 1) goHome();
+  else goPlaying();
 }
 
-// Back from the albums: the shelves (when there's more than one).
+static void handlePlayer(const m5::touch_detail_t& t) {
+  if (tracks.empty()) return;
+  bool story = storyMode();
+  int dir;
+  if (!story && t.base_y < P_CTRL_Y - B_PLAY.r - 4 && flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }  // swipe the title
+  if (!t.wasClicked()) return;
+  if (t.x >= VB_X - 8 && t.y >= VB_Y - 6 && t.y < VB_Y + VB_H + 8) { buzz(); openVolume(); return; }
+  if (hit(B_PLAY, P_CTRL_Y, t.x, t.y)) { buzz(); togglePause(); }
+  else if (hit(B_PREV, P_CTRL_Y, t.x, t.y)) { buzz(); if (story) skipSeconds(-15); else playTrack(current - 1); }
+  else if (hit(B_NEXT, P_CTRL_Y, t.x, t.y)) { buzz(); if (story) skipSeconds(30); else playTrack(current + 1); }
+}
+
 static void handleAlbums(const m5::touch_detail_t& t) {
   int dir;
   if (flickedX(t, dir)) {  // swipe left = next page
@@ -3421,16 +3284,15 @@ static void handleAlbums(const m5::touch_detail_t& t) {
     if (p != albumsPage) { buzz(); albumsPage = p; dirtyAll = true; }
     return;
   }
-  if (!t.wasClicked()) return;
-  if (t.y < GRID_Y - 4) {  // the header
-    if (haveNowPlaying() && t.x >= NP_X - 24) { buzz(); showScreen(Screen::Player); }
-    else if (shelves.size() > 1) { buzz(); showScreen(Screen::Shelves); }
-    return;
+  if (!t.wasClicked() || t.y < AL_CARD_Y - 6) return;
+  for (int k = 0; k < TILES; k++) {
+    int x = AL_X0 + k * (AL_CARD_W + AL_GAP), slot = albumsPage * TILES + k;
+    if (t.x >= x - AL_GAP / 2 && t.x < x + AL_CARD_W + AL_GAP / 2 && slot < (int)shelfAlbums.size()) {
+      buzz();
+      openTracks(shelfAlbums[slot]);
+      return;
+    }
   }
-  if (t.x < GRID_X - 6) return;
-  int col = (t.x - GRID_X + TILE_GAP_X / 2) / (TILE + TILE_GAP_X), row = (t.y - GRID_Y + TILE_GAP_Y / 2) / (TILE + TILE_GAP_Y);
-  int slot = albumsPage * TILES + row * 3 + col;
-  if (col <= 2 && row <= 1 && slot < (int)shelfAlbums.size()) { buzz(); openTracks(shelfAlbums[slot]); }
 }
 
 // Where a book or show picks up: the first track not finished yet.
@@ -3449,20 +3311,18 @@ static void handleTracks(const m5::touch_detail_t& t) {
     int top = constrain(tracksTop + by, 0, std::max(0, (int)viewTracks.size() - trRows()));
     if (top != tracksTop) { buzz(); tracksTop = top; dirtyAll = true; }
   };
-  auto back = [&] { buzz(); openShelf(albums[viewAlbum].shelf, viewAlbum); };
   int dir;
-  if (t.base_x >= COL_X - 8 && flickedY(t, dir)) { scroll(dir * (trRows() - 1)); return; }  // keep one row for context
-  if (flickedX(t, dir) && dir < 0) { back(); return; }                                    // swipe right = back
+  if (flickedY(t, dir)) { scroll(dir * (trRows() - 1)); return; }  // keep one row for context
+  if (flickedX(t, dir) && dir < 0) { navigate(0); return; }       // swipe right = back
   if (!t.wasClicked()) return;
-  if (t.x < COL_X - 8) {  // the card: to the player, starting the album if it isn't the one on
-    if (viewTracks.empty()) return;
+  if (t.y < TL_Y - 4) {  // the header's Play: the album from the start (books/podcasts: where they stopped)
+    if (viewTracks.empty() || !hitAt(PLAY_ALL_X, TH_CY, PLAY_ALL_R, t.x, t.y)) return;
     buzz();
     if (viewAlbum != playAlbum || current < 0) playAlbumTrack(viewAlbum, firstUnfinished(viewAlbum));
     else if (paused) togglePause();
     showScreen(Screen::Player);
     return;
   }
-  if (t.y < TL_Y - 4) { if (hitAt(BACK_X, HEAD_CY, HEAD_R, t.x, t.y)) back(); return; }
   int r = (t.y - TL_Y) / trRowH(), i = tracksTop + r;
   if (r >= trRows() || i >= (int)viewTracks.size()) return;
   buzz();
@@ -3474,9 +3334,9 @@ static void handleTracks(const m5::touch_detail_t& t) {
   showScreen(Screen::Player);
 }
 
-// Grown-ups: hold two of the three touch buttons above the screen together for 3 s. A
-// yellow strip grows along the top edge meanwhile. Kids don't do that by accident, and
-// one finger on a button does nothing at all.
+// Grown-ups: hold two of the three touch buttons together for 3 s. A yellow strip grows
+// along the top edge meanwhile. A kid won't do that by accident, and it isn't a tap, so
+// it doesn't also go Back / Home / Playing.
 static constexpr uint32_t HOLD_MS = 3000;
 
 static void drawHoldProgress(uint32_t heldMs) {
@@ -3503,7 +3363,12 @@ static void handleInput() {
   }
   if (dimmed) return;
 
+  // two buttons held: grown-ups (and no Back/Home/Playing when they let go)
   static uint32_t holdStart = 0, lastHoldDraw = 0;
+  static bool chord = false;
+  bool afterChord = chord;
+  if (buttonsDown >= 2) chord = true;
+  else if (!buttonsDown) chord = false;
   if (buttonsDown >= 2 && screen != Screen::Grownups) {
     if (!holdStart) holdStart = millis();
     uint32_t held = millis() - holdStart;
@@ -3511,7 +3376,7 @@ static void handleInput() {
     if (held >= HOLD_MS) {
       buzz();
       holdStart = 0;
-      loudUntil = 0;
+      volPanelUntil = 0;
       snackShown = Snack::None;
       guTab = 0;
       statsPage = 0;
@@ -3522,7 +3387,20 @@ static void handleInput() {
   }
   if (holdStart) { holdStart = 0; dirtyAll = true; }  // let go early: wipe the strip
 
-  if (loudUntil) { handleLoudness(t); return; }  // the volume panel takes the taps while it's open
+  // Back / Home / Playing: the buttons, or their icons along the top
+  int nav = -1;
+  if (!afterChord && !chord) nav = BTN_LEFT.wasClicked() ? 0 : M5.BtnB.wasClicked() ? 1 : BTN_RIGHT.wasClicked() ? 2 : -1;
+  if (nav < 0 && t.wasClicked() && t.y < STRIP_H + 6 && screen != Screen::Grownups && !volPanelUntil)
+    nav = t.x < 107 ? 0 : t.x < 213 ? 1 : 2;
+  if (nav >= 0) {
+    if (volPanelUntil) volPanelUntil = 0;
+    if (snackUp()) snackUntil = millis();
+    dirtyAll = true;  // repaint even if it stays on the same screen (the panel or a snackbar was up)
+    navigate(nav);
+    return;
+  }
+
+  if (volPanelUntil) { handleVolume(t); return; }  // the volume panel takes the taps while it's open
   if (snackUp() && t.wasClicked()) { snackUntil = millis(); return; }  // a tap only dismisses the snackbar
 
   switch (screen) {
@@ -3541,7 +3419,7 @@ static void handleIdle() {
     dimmed = true;
     M5.Display.setBrightness(20);
   }
-  bool playing = (!paused && current >= 0) || sleepTimerEnd || fadeStart;
+  bool playing = !paused && current >= 0;
   uint32_t offMin = AUTO_OFF_MIN[autoOffIdx];
   if (offMin && !playing && idle > offMin * 60UL * 1000 && !usbPower())
     M5.Power.Axp192.powerOff();  // straight to the PMIC; M5.Power.powerOff() drags deep-sleep code into IRAM
@@ -3905,9 +3783,8 @@ void loop() {
 
   handleInput();
   buzzService();
-  if (loudUntil && (int32_t)(millis() - loudUntil) >= 0) closeLoudness();
+  if (volPanelUntil && (int32_t)(millis() - volPanelUntil) >= 0) closeVolume();
   nightlyCheck();
-  serviceSleepTimer();
   trackListening();
   watchPower();
   serviceSnack();
@@ -3918,24 +3795,14 @@ void loop() {
 
   static uint32_t lastTick = 0;
   uint32_t now = millis();
-  if (screen == Screen::Player && !dimmed && !loudUntil && !tracks.empty() && now - lastTick > 500) {
+  if (screen == Screen::Player && !dimmed && !volPanelUntil && !tracks.empty() && storyMode() && now - lastTick > 1000) {
     lastTick = now;
-    drawProgress();
-    if (storyMode()) {  // time left, and the sleep timer's minutes
-      drawTimeLeft(false);
-      static int chipShown = -1;
-      int chip = fadeStart ? -2 : sleepMinutesLeft();
-      if (chip != chipShown) {
-        chipShown = chip;
-        drawSleepChip();
-        if (snackUp()) drawSnack();
-      }
-    }
+    drawTimeLeft(false);  // books and podcasts: minutes left
   }
 
   // Nothing needs fast service (no audio to decode, no download): let the CPU rest a
   // few ms per pass instead of spinning flat out. Touch still feels instant at ~150 Hz.
-  bool busy = musicIsPlaying() || fadeStart;
+  bool busy = musicIsPlaying();
 #if CORE2_WIFI
   busy |= syncState != SyncState::Idle;
 #endif
