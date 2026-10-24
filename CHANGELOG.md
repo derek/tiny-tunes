@@ -6,6 +6,15 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.7.2 — 2026-10-23
+
+### Changed
+- The green now-playing bar at the bottom is gone. Its job moved to the button at the
+  top right: green with an equalizer while something plays, grey when paused; tap it
+  for the player. On the player that button is the volume.
+- With the room back: album page dots sit at the very bottom (taller cards), the song
+  list shows five rows, and Home's cards fill the screen.
+
 ## 0.7.1 — 2026-10-23
 
 ### Changed

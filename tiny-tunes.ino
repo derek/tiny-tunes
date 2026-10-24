@@ -15,7 +15,7 @@
 // Kid-friendly controls:
 //   The middle touch button below the screen: Home (the left and right ones do nothing alone)
 //   Home: shelves (Podcasts, Music, Books) as a list -> albums as tall cards -> songs
-//   A green now-playing bar at the bottom of those screens goes to the player
+//   The button top right goes to the player (green while playing); there it's the volume
 //   Player: "< album" (tap it to go back), the title, a big play button (books and
 //     podcasts: back 15 s / ahead 30 s too), a progress bar, the volume button (5 steps)
 //   Albums page sideways; lists scroll up/down; on the player, swipe for next / previous song
@@ -2017,9 +2017,9 @@ static void prepareCovers() {
 
 // ================= kid-friendly UI =================
 // The middle touch button below the screen is Home; the other two only count held
-// together (3 s, the grown-ups screen). A green now-playing bar along the bottom of the
-// library screens goes to the player. Back: tap "< album" on the player, or swipe
-// sideways on the song list.
+// together (3 s, the grown-ups screen). Every screen has the same top bar: back (song
+// list, player), where you are, and top right the now-playing button (green while
+// playing; it opens the player) or, on the player, the volume button.
 // Shelves:  Podcasts, Music, Books (and any other shelf) as a list of wide cards.
 // Albums:   tall cards, 3 at a time, paging sideways.
 // Songs:    the album's tall card on the left (it slides over), the songs beside it.
@@ -2059,7 +2059,7 @@ static uint16_t albumTint(int a) {
 // button. See "the top bar".
 static constexpr int NAV_H = 36;
 // The tall album card, the same size and height on the album picker and the song list.
-static constexpr int CARD_X = 8, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 150;
+static constexpr int CARD_X = 8, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 172;
 // Player: "Song 3 of 12", the title, the play button (books and podcasts: back 15 s /
 // ahead 30 s on either side of it), a progress bar along the bottom. Swipe for the next /
 // previous song.
@@ -2351,28 +2351,8 @@ static void drawAlbumCard(int a, int x, int y, int w, int h) {
   drawWrapped(albums[a].name, cx, (top + bottom) / 2, w - 12, (bottom - top) / 17, C_WHITE);
 }
 
-// Something's loaded: the now-playing bar has somewhere to go.
+// Something's loaded: the now-playing button has somewhere to go.
 static bool haveNowPlaying() { return current >= 0 && !tracks.empty(); }
-
-// ----- the now-playing bar -----
-// A green bar along the bottom of Home, the albums and the song list with what's on (or
-// paused); tap it for the player.
-static constexpr int NP_Y = 208, NP_H = 28;
-
-static void drawNowPlayingBar() {
-  if (!haveNowPlaying()) return;
-  auto& d = M5.Display;
-  d.fillRect(0, NP_Y - 2, 320, 240 - NP_Y + 2, C_BG);
-  d.fillRoundRect(8, NP_Y + 3, 304, NP_H, NP_H / 2, C_SHADE);
-  d.fillRoundRect(8, NP_Y, 304, NP_H, NP_H / 2, C_GREEN);
-  int cy = NP_Y + NP_H / 2;
-  if (paused) iconPlay(26, cy, 12, C_WHITE);
-  else iconPlaying(26, cy, C_WHITE);
-  d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextDatum(middle_left);
-  d.setTextColor(C_WHITE);
-  d.drawString(fitLine(title, 260), 42, cy + 1);
-}
 
 // ----- volume -----
 // The volume button on the player shows the level as 5 little bars; tapping it opens 5
@@ -2626,7 +2606,7 @@ static void watchPower() {
 // ----- albums -----
 // Three tall album cards under the top bar, page dots centered below; swipe sideways for more.
 // The playing album gets a ring and a badge, podcasts with new episodes a dot.
-static constexpr int AL_CARD_Y = CARD_Y, AL_CARD_W = CARD_W, AL_CARD_H = CARD_H, AL_DOTS_Y = 201;  // the now-playing bar below
+static constexpr int AL_CARD_Y = CARD_Y, AL_CARD_W = CARD_W, AL_CARD_H = CARD_H, AL_DOTS_Y = 230;  // dots at the very bottom
 static constexpr int AL_GAP = 13, AL_X0 = 12, TILES = 3;
 
 static int viewShelf = 0;
@@ -2696,6 +2676,25 @@ static void drawHouse(int cx, int cy, uint16_t c, uint16_t bg) {
 
 static bool navHasBack() { return screen == Screen::Tracks || screen == Screen::Player; }
 
+// Top right on Home, the albums and the songs: green with an equalizer while something
+// plays, grey when it's paused (or nothing is loaded). Tap it for the player, which has
+// the volume button in the same spot.
+static void drawNowPlayingButton() {
+  auto& d = M5.Display;
+  bool on = musicIsPlaying();
+  uint16_t bg = on ? C_GREEN : C_OFF;
+  d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, VB_H / 2, bg);
+  int cx = VB_X + VB_W / 2, cy = VB_Y + VB_H / 2;
+  uint16_t ink = haveNowPlaying() ? C_WHITE : rgb(90, 96, 130);
+  if (on || !haveNowPlaying()) {  // three equalizer bars
+    d.fillRoundRect(cx - 11, cy - 2, 5, 9, 2, ink);
+    d.fillRoundRect(cx - 3, cy - 8, 5, 15, 2, ink);
+    d.fillRoundRect(cx + 5, cy - 5, 5, 12, 2, ink);
+  } else {  // paused: a play mark
+    iconPlay(cx - 1, cy, 12, ink);
+  }
+}
+
 static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's songs, 3 the player
   auto& d = M5.Display;
   uint16_t bar = rgb(14, 17, 40);
@@ -2722,14 +2721,19 @@ static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's
   d.setTextDatum(middle_left);
   d.setTextColor(C_WHITE);
   d.drawString(fitLine(label, VB_X - x - 34), x + 30, NAV_CY + 1);
-  drawVolumeButton();
+  if (level == 3) drawVolumeButton();  // the player: volume
+  else drawNowPlayingButton();         // elsewhere: what's playing
 }
 
 // A tap in the top bar: back, or the volume button.
 static void openTracks(int a);
 static bool handleNavBar(const m5::touch_detail_t& t) {
   if (!t.wasClicked() || t.y >= NAV_H + 6) return false;
-  if (t.x >= VB_X - 10) { buzz(); openVolume(); return true; }
+  if (t.x >= VB_X - 10) {
+    if (screen == Screen::Player) { buzz(); openVolume(); }
+    else if (haveNowPlaying()) { buzz(); showScreen(Screen::Player); }
+    return true;
+  }
   if (t.x < NB_TAP_W && navHasBack()) {
     buzz();
     if (screen == Screen::Player && playAlbum >= 0) openTracks(playAlbum);
@@ -2740,9 +2744,9 @@ static bool handleNavBar(const m5::touch_detail_t& t) {
 
 // ----- shelves: the library's top level (Home) -----
 // A list of wide cards, one per shelf (Podcasts, Music, Books, then any other), above
-// the now-playing bar: the shelf's picture and name, and on the right how many podcast
+// each with the shelf's picture and name, and on the right how many podcast
 // episodes are new.
-static constexpr int SH_TOP = NAV_H + 6, SH_BOTTOM = 202, SH_GAP = 6;
+static constexpr int SH_TOP = NAV_H + 6, SH_BOTTOM = 234, SH_GAP = 6;
 
 static void shelfTileRect(int i, int& x, int& y, int& w, int& h) {
   int n = std::max(1, std::min((int)shelves.size(), 6));
@@ -2806,8 +2810,8 @@ static void handleShelves(const m5::touch_detail_t& t) {
 // up/down to scroll; the top bar goes back. Podcast episodes have a date badge.
 static constexpr int TC_X = CARD_X, TC_Y = CARD_Y;  // the card: same size as on the album picker
 static constexpr int TL_Y = CARD_Y, TL_X = TC_X + AL_CARD_W + 16, TL_W = 306 - TL_X;
-static int trRowH() { return 40; }  // four rows above the now-playing bar
-static int trRows() { return 4; }
+static int trRowH() { return 39; }
+static int trRows() { return 5; }
 static int slideFromX = -1;  // set when a card was tapped on the album picker: slide it over
 
 static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown in the list
@@ -3318,7 +3322,6 @@ static void redraw() {
     else if (screen == Screen::Shelves) drawShelves();
     else if (screen == Screen::Tracks) drawTracks();
     else { drawGrownups(); connectDirty = false; }
-    if (screen == Screen::Shelves || screen == Screen::Albums || screen == Screen::Tracks) drawNowPlayingBar();
   }
   if (dirtyNow) {  // new song, pause/play
     dirtyNow = false;
@@ -3328,9 +3331,8 @@ static void redraw() {
       else { drawPlayerInfo(); drawControls(); drawPlayProgress(); }
     } else if (screen == Screen::Tracks) {  // the playing row moved
       drawTracks();
-      drawNowPlayingBar();
     } else if (screen == Screen::Shelves || screen == Screen::Albums) {
-      drawNowPlayingBar();
+      drawNowPlayingButton();  // green / grey
     }
   }
   if (screen == Screen::Grownups && connectDirty) {  // Bluetooth news: only that tab shows it
@@ -3354,7 +3356,7 @@ static bool flickedY(const m5::touch_detail_t& t, int& dir) {
 
 // Getting around. The middle touch button is Home: the shelves (or the albums, with
 // just one shelf). Back (the player's "< album" line, a sideways swipe on the song list):
-// player -> its songs -> the shelf's albums. The now-playing bar: the player.
+// player -> its songs -> the shelf's albums. The now-playing button: the player.
 static void goBack() {
   if (screen == Screen::Player && playAlbum >= 0) openTracks(playAlbum);
   else if (screen == Screen::Tracks && viewAlbum >= 0) openShelf(albums[viewAlbum].shelf, viewAlbum);
@@ -3416,7 +3418,7 @@ static void handleTracks(const m5::touch_detail_t& t) {
   if (!t.wasClicked() || t.x < TL_X - 4 || t.y < TL_Y - 4) return;  // the card itself does nothing
   int r = (t.y - TL_Y) / trRowH(), i = tracksTop + r;
   if (r >= trRows() || i >= (int)viewTracks.size()) return;
-  buzz();  // play it and stay on the list (the now-playing bar goes to the player)
+  buzz();  // play it and stay on the list (the now-playing button goes to the player)
   if (viewAlbum == playAlbum && i == current) togglePause();  // the song that's on: pause / carry on
   else playAlbumTrack(viewAlbum, i);
 }
@@ -3521,8 +3523,6 @@ static void handleInput() {
   if (volPanelUntil) { handleVolume(t); return; }  // the volume panel takes the taps while it's open
   if (snackUp() && t.wasClicked()) { snackUntil = millis(); return; }  // a tap only dismisses the snackbar
   if (screen != Screen::Grownups && handleNavBar(t)) return;  // the top bar
-  if (t.wasClicked() && t.y >= NP_Y - 6 && haveNowPlaying() &&
-      (screen == Screen::Shelves || screen == Screen::Albums || screen == Screen::Tracks)) { navigate(2); return; }  // the now-playing bar
 
   switch (screen) {
     case Screen::Player: handlePlayer(t); break;

@@ -6,8 +6,8 @@ Built for a 5- and a 7-year-old: big picture buttons, no internet browsing, ever
 chosen by a grown-up.
 
 The middle touch button below the screen is **Home**. Every screen has the same top bar:
-a round back button (on the song list and the player), where you are, and the volume
-button. A green bar along the bottom of the library screens goes to what's playing.
+a round back button (on the song list and the player), where you are, and top right a
+button that's green while music plays and opens the player (where it's the volume).
 Home is the shelves (Podcasts, Music, Books)
 as a list of wide cards; then albums as tall cards, three at a time; then the songs.
 The player keeps it simple: the album, the title, one big play button (swipe for the next
