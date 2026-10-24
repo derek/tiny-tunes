@@ -6,6 +6,23 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.6.4 — 2026-10-23
+
+### Changed
+- Home: no show/album counts, and smaller pictures with room around them.
+- The song list: the album's tall card sits on the left (it slides over from the album
+  picker when you tap it), with the songs beside it. The header with the back button,
+  name and song count is gone: swipe sideways to go back.
+- The player: the album's tall card is on the left, like on the album picker and
+  the song list; tap it to go back to the songs. No previous / next buttons: swipe
+  left for the next song and right for the previous one, leaving one big play button
+  (books and podcasts keep back 15 s / ahead 30 s beside it).
+
+### Fixed
+- The music could stutter for a moment when changing screens: drawing a screen held
+  up the MP3 decoder (the screen and the SD card share one bus). It now keeps decoding
+  between the slow steps, and the audio buffer is twice as long.
+
 ## 0.6.3 — 2026-10-23
 
 ### Changed

@@ -6,10 +6,12 @@ Built for a 5- and a 7-year-old: big picture buttons, no internet browsing, ever
 chosen by a grown-up.
 
 The middle touch button below the screen is **Home**; a green bar along the bottom of
-the library screens goes to what's playing, and round back buttons go up a level.
+the library screens goes to what's playing. Back is a tap on the player's album card, or
+a sideways swipe on the song list (the album's card sits beside its songs).
 Home is the shelves (Podcasts, Music, Books)
 as a list of wide cards; then albums as tall cards, three at a time; then the songs.
-The player keeps it simple: the title, big buttons, and a volume button with 5 steps.
+The player keeps it simple: the card, the title, one big play button (swipe for the next
+or previous song), a progress bar, and a volume button with 5 steps.
 Books and podcasts skip 15 s back / 30 s ahead and resume where they stopped.
 Snackbars at the bottom say when the battery is low, it's charging, or headphones connect.
 
