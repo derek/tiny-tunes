@@ -6,6 +6,13 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.7.1 — 2026-10-23
+
+### Changed
+- The top bar is simpler and bigger (36 px): a round back button on the left (on the
+  song list and the player), a little picture and the name of where you are, and a
+  bigger volume button. The picture breadcrumbs were too small to tap.
+
 ## 0.7.0 — 2026-10-23
 
 ### Changed
