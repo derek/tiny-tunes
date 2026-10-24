@@ -2335,12 +2335,11 @@ static void drawShelfIcon(ShelfKind kind, int cx, int cy, uint16_t c, uint16_t b
 }
 
 // ----- the tall card (albums and shelves) -----
-// A white-edged card with a shadow, and another card peeking out behind it for albums
-// (like a stack of cards).
+// A flat, white-edged card, with another card peeking out behind it for albums (like a
+// stack of cards).
 static void drawCardFrame(int x, int y, int w, int h, uint16_t fill, bool stacked) {
   auto& d = M5.Display;
   if (stacked) d.fillRoundRect(x + 8, y + 3, w, h - 6, 13, rgb(44, 50, 96));
-  d.fillRoundRect(x, y + 4, w, h, 13, C_SHADE);
   d.fillRoundRect(x, y, w, h, 13, C_WHITE);
   d.fillRoundRect(x + 4, y + 4, w - 8, h - 8, 9, fill);
 }

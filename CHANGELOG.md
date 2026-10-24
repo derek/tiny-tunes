@@ -6,6 +6,11 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.7.6 — 2026-10-24
+
+### Changed
+- Cards are flat: no shadow under the album and shelf cards.
+
 ## 0.7.5 — 2026-10-24
 
 ### Changed
