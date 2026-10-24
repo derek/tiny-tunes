@@ -6,6 +6,20 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.8.0 — 2026-10-24
+
+### Changed
+- Everything is flat: no shadows under buttons, panels, the snackbar or text.
+- The top bar always shows the shelf's name (Music, Podcasts, Books) next to the back
+  button; the album picker has a back button too (to Home). Only Home shows the house.
+- The now-playing button is always three sound bars: bouncing on green while music
+  plays, still and grey when paused.
+
+### Fixed
+- The song list no longer redraws the whole screen (card and cover included) when the
+  next song starts, or when scrolling; just the rows.
+- Book and podcast lists read each file's size once instead of on every redraw.
+
 ## 0.7.7 — 2026-10-24
 
 ### Changed

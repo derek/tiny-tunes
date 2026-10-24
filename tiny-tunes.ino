@@ -2162,7 +2162,7 @@ static std::vector<String> wrapText(const String& text, int w, int maxLines) {
   return lines;
 }
 
-// Draws centered, wrapped text with a 1 px shadow, picking the biggest font where
+// Draws centered, wrapped text, picking the biggest font where
 // every word fits whole (too many lines or a word too wide both mean "smaller").
 static void drawTitle(const String& text, int cx, int cy, int w, int h, uint16_t fg, bool small = false) {
   auto& d = M5.Display;
@@ -2185,12 +2185,8 @@ static void drawTitle(const String& text, int cx, int cy, int w, int h, uint16_t
   }
   d.setTextDatum(middle_center);
   int y0 = cy - (int)(lines.size() - 1) * lh / 2;
-  for (size_t i = 0; i < lines.size(); i++) {
-    d.setTextColor(C_SHADE);
-    d.drawString(lines[i], cx + 1, y0 + i * lh + 1);
-    d.setTextColor(fg);
-    d.drawString(lines[i], cx, y0 + i * lh);
-  }
+  d.setTextColor(fg);
+  for (size_t i = 0; i < lines.size(); i++) d.drawString(lines[i], cx, y0 + i * lh);
 }
 
 // One line of text, shortened with "..." to fit.
@@ -2235,10 +2231,6 @@ static void iconHeadphones(int x, int y, uint16_t c) {  // top at y
   M5.Display.fillRoundRect(x - 10, y + 7, 5, 8, 2, c);
   M5.Display.fillRoundRect(x + 6, y + 7, 5, 8, 2, c);
 }
-static void iconWifi(int x, int y, uint16_t c) {  // top at y
-  for (int r = 4; r <= 12; r += 4) M5.Display.fillArc(x, y + 13, r, r - 2, 225, 315, c);
-  M5.Display.fillCircle(x, y + 12, 2, c);
-}
 static void iconArrow(int x, int y, int dir, uint16_t c) {  // dir: 0 left, 1 right, 2 up, 3 down
   int s = 8;
   if (dir == 0) M5.Display.fillTriangle(x - s, y, x + s / 2, y - s, x + s / 2, y + s, c);
@@ -2251,14 +2243,9 @@ static void iconPlaying(int x, int y, uint16_t c) {  // three little equalizer b
   M5.Display.fillRect(x - 1, y - 5, 3, 10, c);
   M5.Display.fillRect(x + 4, y - 3, 3, 8, c);
 }
-static void iconMoon(int x, int y, int r, uint16_t c, uint16_t bg) {
-  M5.Display.fillCircle(x, y, r, c);
-  M5.Display.fillCircle(x + r / 2, y - r / 3, r * 4 / 5, bg);
-}
 
-// A round button with a drop shadow.
+// A flat round button.
 static void drawRound(int x, int y, int r, uint16_t color) {
-  M5.Display.fillCircle(x, y + 3, r, C_SHADE);
   M5.Display.fillCircle(x, y, r, color);
 }
 
@@ -2341,7 +2328,7 @@ static void drawCardFrame(int x, int y, int w, int h, uint16_t fill) {
   d.fillRoundRect(x + 4, y + 4, w - 8, h - 8, 9, fill);
 }
 
-// Centered text in one font size (bold 9 pt) with a 1 px shadow, wrapped over up to
+// Centered text in one font size (bold 9 pt), wrapped over up to
 // maxLines lines ("..." past that). Album names use it so they all look the same.
 static void drawWrapped(const String& text, int cx, int cy, int w, int maxLines, uint16_t fg) {
   auto& d = M5.Display;
@@ -2349,12 +2336,8 @@ static void drawWrapped(const String& text, int cx, int cy, int w, int maxLines,
   auto lines = wrapText(text, w, std::max(1, maxLines));
   int lh = 17, y0 = cy - (int)(lines.size() - 1) * lh / 2;
   d.setTextDatum(middle_center);
-  for (size_t i = 0; i < lines.size(); i++) {
-    d.setTextColor(C_SHADE);
-    d.drawString(lines[i], cx + 1, y0 + i * lh + 1);
-    d.setTextColor(fg);
-    d.drawString(lines[i], cx, y0 + i * lh);
-  }
+  d.setTextColor(fg);
+  for (size_t i = 0; i < lines.size(); i++) d.drawString(lines[i], cx, y0 + i * lh);
 }
 
 static M5Canvas* getCover(int a, int size);
@@ -2409,7 +2392,6 @@ static void drawVolumeLevels() {
     int x = VL_COL_X0 + i * VL_STEP, bh = 34 + i * 24;
     bool here = i == volStep() - 1;
     d.fillRoundRect(x, VL_COL_Y, VL_COL_W, VL_BASE + 8 - VL_COL_Y, 12, here ? rgb(58, 65, 112) : C_PANEL);
-    d.fillRoundRect(x + 8, VL_BASE - bh + 4, 36, bh, 10, C_SHADE);
     d.fillRoundRect(x + 8, VL_BASE - bh, 36, bh, 10, i < volStep() ? C_YELLOW : C_OFF);
   }
 }
@@ -2417,7 +2399,6 @@ static void drawVolumeLevels() {
 static void openVolume() {
   auto& d = M5.Display;
   volPanelUntil = millis() + 5000;
-  d.fillRoundRect(VL_X, VL_Y + 4, VL_W, VL_H, 18, C_SHADE);
   d.fillRoundRect(VL_X, VL_Y, VL_W, VL_H, 18, C_PANEL);
   d.drawRoundRect(VL_X, VL_Y, VL_W, VL_H, 18, C_OFF);
   iconSpeaker(VL_X + 26, VL_Y + 18, C_WHITE);
@@ -2593,7 +2574,6 @@ static void drawSnack() {
     case Snack::Speaker: bg = rgb(16, 40, 70); edge = C_BLUE; text = "Playing out loud"; break;
     default: return;
   }
-  d.fillRoundRect(SN_X, SN_Y + 4, SN_W, SN_H, 14, C_SHADE);
   d.fillRoundRect(SN_X, SN_Y, SN_W, SN_H, 14, edge);
   d.fillRoundRect(SN_X + 3, SN_Y + 3, SN_W - 6, SN_H - 6, 11, bg);
   int cy = SN_Y + SN_H / 2;
@@ -2702,17 +2682,15 @@ static void drawAlbums() {
       iconPlaying(x + AL_CARD_W - 17, y + AL_CARD_H - 17, C_WHITE);
     }
     if (albums[a].newCount > 0) {  // new podcast episodes
-      d.fillCircle(x + 14, y + 14, 9, C_SHADE);
       d.fillCircle(x + 14, y + 14, 7, C_YELLOW);
     }
   }
 }
 
 // ----- the top bar -----
-// Just pictures, no words: a round back button on the left (up one level) on the songs
-// and the player; Home's house or the shelf's picture there on the others (Home is the
-// way back from those). On the right the now-playing button, or the volume on the
-// player. Same height and place on every screen.
+// A round back button on the left (up one level; Home shows its house there instead) and
+// the shelf's name, and on the right the now-playing button, or the volume on the player.
+// Same height and place on every screen.
 static constexpr int NB_X = 24, NB_R = 15, NB_TAP_W = 62, NAV_CY = NAV_H / 2;
 
 static void drawHouse(int cx, int cy, uint16_t c, uint16_t bg) {
@@ -2722,46 +2700,49 @@ static void drawHouse(int cx, int cy, uint16_t c, uint16_t bg) {
   d.fillRect(cx - 2, cy + 3, 4, 5, bg);  // the door
 }
 
-static bool navHasBack() { return screen == Screen::Tracks || screen == Screen::Player; }
+static bool navHasBack() { return screen != Screen::Shelves; }
 
-// Top right on Home, the albums and the songs: green with an equalizer while something
-// plays, grey when it's paused (or nothing is loaded). Tap it for the player, which has
-// the volume button in the same spot.
+// Top right on Home, the albums and the songs: three sound bars, bouncing on green while
+// something plays, still and grey when it's paused (or nothing is loaded). Tap it for
+// the player, which has the volume button in the same spot.
 static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random bar heights
   static uint8_t heights[3] = {9, 15, 12};
   static uint32_t seed = 88675123;  // xorshift; libc rand() costs IRAM
   auto& d = M5.Display;
   bool on = musicIsPlaying();
-  uint16_t bg = on ? C_GREEN : C_OFF;
-  d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, VB_H / 2, bg);
+  d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, VB_H / 2, on ? C_GREEN : C_OFF);
   int cx = VB_X + VB_W / 2, cy = VB_Y + VB_H / 2;
-  uint16_t ink = haveNowPlaying() ? C_WHITE : rgb(90, 96, 130);
-  if (on || !haveNowPlaying()) {  // three equalizer bars, standing on one line
-    if (bounce)
-      for (auto& h : heights) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; h = 5 + seed % 13; }
-    for (int i = 0; i < 3; i++) d.fillRoundRect(cx - 11 + i * 8, cy + 8 - heights[i], 5, heights[i], 2, ink);
-  } else {  // paused: a play mark
-    iconPlay(cx - 1, cy, 12, ink);
-  }
+  if (bounce && on)
+    for (auto& h : heights) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; h = 5 + seed % 13; }
+  uint16_t ink = on ? C_WHITE : rgb(150, 156, 190);
+  for (int i = 0; i < 3; i++) d.fillRoundRect(cx - 11 + i * 8, cy + 8 - heights[i], 5, heights[i], 2, ink);
 }
 
+// Back on the left (Home's house instead), the shelf's name, and top right the
+// now-playing button (the volume on the player).
 static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's songs, 3 the player
   auto& d = M5.Display;
   uint16_t bar = rgb(14, 17, 40);
   d.fillRect(0, 0, 320, NAV_H, bar);
-  if (level >= 2) {  // the songs and the player: back
+  if (level == 0) {
+    drawHouse(NB_X, NAV_CY, C_WHITE, bar);
+  } else {
     drawRound(NB_X, NAV_CY - 1, NB_R, C_OFF);
     iconArrow(NB_X - 1, NAV_CY - 1, 0, C_WHITE);
-  } else if (level == 0) {
-    drawHouse(NB_X, NAV_CY, C_WHITE, bar);
-  } else if (viewShelf >= 0 && viewShelf < (int)shelves.size()) {
-    drawShelfIcon(shelves[viewShelf].kind, NB_X + 2, NAV_CY + 1, C_WHITE, bar, 34);
+    int shelf = level == 1 ? viewShelf : level == 2 ? (viewAlbum >= 0 ? albums[viewAlbum].shelf : -1)
+                                                    : (playAlbum >= 0 ? albums[playAlbum].shelf : -1);
+    if (shelf >= 0 && shelf < (int)shelves.size()) {
+      d.setFont(&fonts::FreeSansBold12pt7b);
+      d.setTextDatum(middle_left);
+      d.setTextColor(C_WHITE);
+      d.drawString(fitLine(shelves[shelf].name, VB_X - NB_X - NB_R - 24), NB_X + NB_R + 12, NAV_CY + 1);
+    }
   }
   if (level == 3) drawVolumeButton();  // the player: volume
   else drawNowPlayingButton();         // elsewhere: what's playing
 }
 
-// A tap in the top bar: back, or the volume button.
+// A tap in the top bar: back (player -> songs -> albums -> Home), or the right button.
 static void openTracks(int a);
 static bool handleNavBar(const m5::touch_detail_t& t) {
   if (!t.wasClicked() || t.y >= NAV_H + 6) return false;
@@ -2774,6 +2755,7 @@ static bool handleNavBar(const m5::touch_detail_t& t) {
     buzz();
     if (screen == Screen::Player && playAlbum >= 0) openTracks(playAlbum);
     else if (screen == Screen::Tracks && viewAlbum >= 0) openShelf(albums[viewAlbum].shelf, viewAlbum);
+    else if (screen == Screen::Albums) showScreen(Screen::Shelves);
   }
   return true;  // the rest of the bar does nothing
 }
@@ -2810,8 +2792,6 @@ static void drawShelves() {
     }
     d.setFont(&fonts::FreeSansBold12pt7b);
     d.setTextDatum(middle_left);
-    d.setTextColor(C_SHADE);
-    d.drawString(fitLine(sh.name, 150), tx + 1, cy + 1);
     d.setTextColor(C_WHITE);
     d.drawString(fitLine(sh.name, 150), tx, cy);
     if (sh.newCount > 0) {  // new podcast episodes
@@ -2854,12 +2834,14 @@ static int trRows() { return isPodcastAlbum(viewAlbum) ? 4 : 5; }
 static int slideFromX = -1;  // set when a card was tapped on the album picker: slide it over
 
 static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown in the list
+static std::vector<int32_t> viewSizes;        // ...and each file's size, looked up once (-1: not yet)
 
 static void openTracks(int a) {
   viewAlbum = a;
   viewTracks = (a == playAlbum) ? tracks : listTracks(a);
   if (isResumable(a)) saveResumePos(false);  // so the playing track's bar is current
   viewResume = isResumable(a) ? loadResume(albums[a].path) : std::vector<ResumeEntry>();
+  viewSizes.assign(viewTracks.size(), -1);
   tracksTop = (a == playAlbum && current >= 0) ? std::max(0, std::min(current - 1, (int)viewTracks.size() - trRows())) : 0;
   screen = Screen::Tracks;
   dirtyAll = true;
@@ -2881,9 +2863,9 @@ static void drawProgressMark(int i, int x0, int x1, int y, int h, bool playing) 
     d.drawWideLine(x1 - 9, y + h / 2 + 5, x1, y + h / 2 - 5, 2.5f, c);
     return;
   }
-  File f = SD.open(viewTracks[i]);
-  uint32_t size = f ? f.size() : 0;
-  if (f) f.close();
+  if (i >= (int)viewSizes.size()) viewSizes.resize(viewTracks.size(), -1);
+  if (viewSizes[i] < 0) viewSizes[i] = fileSize(viewTracks[i]);
+  uint32_t size = viewSizes[i];
   if (!size || e->pos == 0) return;
   int w = x1 - x0, fill = std::min<int64_t>(w, (int64_t)w * e->pos / size);
   d.fillRoundRect(x0, y + h - 6, w, 3, 1, playing ? rgb(255, 255, 255) : C_OFF);
@@ -2903,6 +2885,7 @@ static void slideCard(int a, int fromX) {
   }
 }
 
+static void drawTrackRows();
 static void drawTracks() {
   auto& d = M5.Display;
   bool podcast = isPodcastAlbum(viewAlbum);
@@ -2917,6 +2900,14 @@ static void drawTracks() {
     if (!podcast) drawAlbumCard(viewAlbum, TC_X, TC_Y, AL_CARD_W, TC_H);
   }
   slideFromX = -1;
+  drawTrackRows();
+}
+
+// Just the song rows and the scroll bar (a new song, or a scroll: the card stays).
+static void drawTrackRows() {
+  auto& d = M5.Display;
+  bool podcast = isPodcastAlbum(viewAlbum);
+  d.fillRect(tlX() - 2, TL_Y - 2, 322 - tlX(), 242 - TL_Y, C_BG);
   uint16_t ac = albumTint(viewAlbum);
   int n = viewTracks.size();
   int rowH = trRowH(), rows = trRows();
@@ -3333,6 +3324,7 @@ static void onLibraryChanged() {
   shelfAlbums.clear();
   viewTracks.clear();
   viewResume.clear();
+  viewSizes.clear();
   viewAlbum = -1;
   auto stale = [](Screen s) { return s == Screen::Albums || s == Screen::Tracks || s == Screen::Shelves; };
   if (stale(screen)) screen = Screen::Player;
@@ -3367,7 +3359,8 @@ static void redraw() {
       if (tracks.empty()) drawPlayer();
       else { drawPlayerInfo(); drawControls(); drawPlayProgress(); }
     } else if (screen == Screen::Tracks) {  // the playing row moved
-      drawTracks();
+      drawTrackRows();
+      drawNowPlayingButton();
     } else if (screen == Screen::Shelves || screen == Screen::Albums) {
       drawNowPlayingButton();  // green / grey
     }
@@ -3391,27 +3384,11 @@ static bool flickedY(const m5::touch_detail_t& t, int& dir) {
   return true;
 }
 
-// Getting around. The middle touch button is Home: the shelves (or the albums, with
-// just one shelf). Back (the player's "< album" line, a sideways swipe on the song list):
-// player -> its songs -> the shelf's albums. The now-playing button: the player.
-static void goBack() {
-  if (screen == Screen::Player && playAlbum >= 0) openTracks(playAlbum);
-  else if (screen == Screen::Tracks && viewAlbum >= 0) openShelf(albums[viewAlbum].shelf, viewAlbum);
-  else if (screen == Screen::Albums && shelves.size() > 1) showScreen(Screen::Shelves);
-  else if (screen == Screen::Grownups) showScreen(beforeGrownups);
-}
+// The middle touch button is Home: the shelves. (Back is in the top bar; the
+// now-playing button there goes to the player.)
 static void goHome() {
-  if (shelves.size() > 1) showScreen(Screen::Shelves);
-  else openShelf(0, playAlbum);
-}
-static void goPlaying() {
-  if (haveNowPlaying()) showScreen(Screen::Player);
-}
-static void navigate(int which) {
   buzz();
-  if (which == 0) goBack();
-  else if (which == 1) goHome();
-  else goPlaying();
+  showScreen(Screen::Shelves);
 }
 
 static void handlePlayer(const m5::touch_detail_t& t) {
@@ -3461,7 +3438,7 @@ static void handleAlbums(const m5::touch_detail_t& t) {
 static void handleTracks(const m5::touch_detail_t& t) {
   auto scroll = [&](int by) {
     int top = constrain(tracksTop + by, 0, std::max(0, (int)viewTracks.size() - trRows()));
-    if (top != tracksTop) { buzz(); tracksTop = top; dirtyAll = true; }
+    if (top != tracksTop) { buzz(); tracksTop = top; drawTrackRows(); if (snackUp()) drawSnack(); }
   };
   int dir;
   if (flickedY(t, dir)) { scroll(dir * (trRows() - 1)); return; }  // keep one row for context
@@ -3561,12 +3538,11 @@ static void handleInput() {
   if (holdStart) { holdStart = 0; dirtyAll = true; }  // let go early: wipe the strip
 
   // the middle button: Home (the left and right ones only count held together, above)
-  int nav = !afterChord && !chord && M5.BtnB.wasClicked() ? 1 : -1;
-  if (nav >= 0) {
+  if (!afterChord && !chord && M5.BtnB.wasClicked()) {
     if (volPanelUntil) volPanelUntil = 0;
     if (snackUp()) snackUntil = millis();
     dirtyAll = true;  // repaint even if it stays on the same screen (the panel or a snackbar was up)
-    navigate(nav);
+    goHome();
     return;
   }
 
@@ -3796,8 +3772,6 @@ static void drawSplash() {
     char ch[2] = {*p, 0};
     if (*p != ' ') {
       const uint8_t* c = RAINBOW[k++ % 7];
-      d.setTextColor(C_SHADE);
-      d.drawString(ch, x + 2, y + 3);
       d.setTextColor(rgb(c[0], c[1], c[2]));
       d.drawString(ch, x, y);
     }
