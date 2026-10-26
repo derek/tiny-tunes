@@ -6,6 +6,16 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.2 — 2026-10-25
+
+### Changed
+- The song list's header (cover, name, artist) scrolls away with the list: scrolled
+  down, six songs fit (four podcast episodes); back at the top, the header returns.
+
+### Fixed
+- The cover sat a couple of pixels differently on the song list and the player; it now
+  stays put between them.
+
 ## 0.9.1 — 2026-10-25
 
 ### Changed

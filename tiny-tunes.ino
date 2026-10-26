@@ -2459,7 +2459,7 @@ static constexpr int CV_BIG = 116, CV_SIDE = 76, CV_HEAD = 60;
 // louder in one row, the volume level and (books, podcasts) where you are and how long is
 // left, and a progress bar to drag: the song, or for books the whole book (a tick between
 // chapters). Swipe for the next / previous track too.
-static constexpr int P_COVER_X = 14, P_COVER_Y = NAV_H + 10, P_COVER = CV_HEAD, P_CTRL_Y = 158;
+static constexpr int P_COVER_X = 12, P_COVER_Y = NAV_H + 8, P_COVER = CV_HEAD, P_CTRL_Y = 158;  // = the song list's header
 static constexpr RoundButton B_PLAY{160, 34}, B_PREV{92, 24}, B_NEXT{228, 24}, B_QUIET{30, 20}, B_LOUD{290, 20};
 static constexpr int VOL_DOTS_Y = 204, P_LABEL_Y = 205;               // the level under play, labels either side
 static constexpr int PB_X = 22, PB_Y = 220, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
@@ -3226,9 +3226,14 @@ static void handleShelves(const m5::touch_detail_t& t) {
 // artist; the songs below in full-width rows, all in one font size (long titles wrap onto
 // a second line). Tap a song to play it (the list stays; tap the playing one for its
 // page). Swipe up/down to scroll; the top bar goes back. Podcast episodes have a date badge.
-static constexpr int TH_X = 12, TH_Y = NAV_H + 8, TL_Y = TH_Y + CV_HEAD + 8, TL_X = 8, TL_W = 298;
+// The header sits at the top of the list like its first item: scrolled down, it's gone
+// and the rows use the whole screen under the top bar.
+static constexpr int TH_X = P_COVER_X, TH_Y = P_COVER_Y, TL_Y = TH_Y + CV_HEAD + 8, TL_FULL_Y = NAV_H + 6, TL_X = 8, TL_W = 298;
 static int trRowH() { return isPodcastAlbum(viewAlbum) ? 42 : 32; }
-static int trRows() { return isPodcastAlbum(viewAlbum) ? 3 : 4; }
+static int listTopFor(int top) { return top == 0 ? TL_Y : TL_FULL_Y; }    // where the rows start
+static int rowsFor(int top) { return (242 - listTopFor(top)) / trRowH(); }  // 4 under the header, 6 without (podcasts 3, 4)
+static int listTop() { return listTopFor(tracksTop); }
+static int trRows() { return rowsFor(tracksTop); }
 static bool shrinkFromCarousel = false;  // set when the carousel's middle cover was tapped
 static int tlX() { return TL_X; }
 static int tlW() { return TL_W; }
@@ -3242,7 +3247,9 @@ static void openTracks(int a) {
   if (isResumable(a)) saveResumePos(false);  // so the playing track's bar is current
   viewResume = isResumable(a) ? loadResume(albums[a].path) : std::vector<ResumeEntry>();
   viewSizes.assign(viewTracks.size(), -1);
-  tracksTop = (a == playAlbum && current >= 0) ? std::max(0, std::min(current - 1, (int)viewTracks.size() - trRows())) : 0;
+  int n = viewTracks.size();
+  tracksTop = 0;
+  if (a == playAlbum && current >= rowsFor(0)) tracksTop = std::max(1, std::min(current - 1, n - rowsFor(1)));
   screen = Screen::Tracks;
   dirtyAll = true;
 }
@@ -3316,12 +3323,12 @@ static void drawTracks() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
   drawNavBar(2);
-  if (shrinkFromCarousel) {  // just picked: the big cover shrinks into the header
+  if (shrinkFromCarousel && tracksTop == 0) {  // just picked: the big cover shrinks into the header
     drawAlbumArt(viewAlbum, CV_X, CV_Y, CV_BIG);
     shrinkCover(viewAlbum);
   }
   shrinkFromCarousel = false;
-  drawTrackHeader();
+  if (tracksTop == 0) drawTrackHeader();
   drawTrackRows();
 }
 
@@ -3329,14 +3336,14 @@ static void drawTracks() {
 static void drawTrackRows() {
   auto& d = M5.Display;
   bool podcast = isPodcastAlbum(viewAlbum);
-  d.fillRect(tlX() - 2, TL_Y - 2, 322 - tlX(), 242 - TL_Y, C_BG);
+  d.fillRect(tlX() - 2, listTop() - 2, 322 - tlX(), 242 - listTop(), C_BG);
   uint16_t ac = albumTint(viewAlbum);
   int n = viewTracks.size();
   int rowH = trRowH(), rows = trRows();
   for (int r = 0; r < rows; r++) {
     int i = tracksTop + r;
     if (i >= n) break;
-    int y = TL_Y + r * rowH, h = rowH - 4, my = y + h / 2;
+    int y = listTop() + r * rowH, h = rowH - 4, my = y + h / 2;
     bool playing = viewAlbum == playAlbum && i == current;
     audioPump();
     d.fillRoundRect(tlX(), y, tlW(), h, 10, playing ? ac : C_ROW);
@@ -3386,9 +3393,9 @@ static void drawTrackRows() {
   }
   if (n > rows) {  // scroll bar
     int trackH = rows * rowH - 4, barH = std::max(16, trackH * rows / n);
-    int barY = TL_Y + (trackH - barH) * tracksTop / std::max(1, n - rows);
-    d.fillRoundRect(311, TL_Y, 5, trackH, 2, C_ROW);
-    d.fillRoundRect(311, std::min(barY, TL_Y + trackH - barH), 5, barH, 2, C_DIM);
+    int y0 = listTop(), barY = y0 + (trackH - barH) * tracksTop / std::max(1, n - rowsFor(1));
+    d.fillRoundRect(311, y0, 5, trackH, 2, C_ROW);
+    d.fillRoundRect(311, std::min(barY, y0 + trackH - barH), 5, barH, 2, C_DIM);
   }
 }
 
@@ -3884,14 +3891,23 @@ static void handleAlbums(const m5::touch_detail_t& t) {
 }
 
 static void handleTracks(const m5::touch_detail_t& t) {
-  auto scroll = [&](int by) {
-    int top = constrain(tracksTop + by, 0, std::max(0, (int)viewTracks.size() - trRows()));
-    if (top != tracksTop) { buzz(); tracksTop = top; drawTrackRows(); if (snackUp()) drawSnack(); }
+  auto scroll = [&](int dir) {  // a page at a time, keeping one row for context
+    int n = viewTracks.size(), top;
+    if (n <= rowsFor(0)) return;  // it all fits under the header
+    if (dir > 0) top = std::min(tracksTop + rowsFor(tracksTop) - 1, std::max(1, n - rowsFor(1)));
+    else top = tracksTop - (rowsFor(1) - 1) <= 0 ? 0 : tracksTop - (rowsFor(1) - 1);
+    if (top == tracksTop) return;
+    buzz();
+    bool header = (top == 0) != (tracksTop == 0);  // the header comes or goes: redraw it all
+    tracksTop = top;
+    if (header) drawTracks();
+    else drawTrackRows();
+    if (snackUp()) drawSnack();
   };
   int dir;
-  if (flickedY(t, dir)) { scroll(dir * (trRows() - 1)); return; }  // keep one row for context
-  if (!t.wasClicked() || t.x < tlX() - 4 || t.y < TL_Y - 4) return;  // the card itself does nothing
-  int r = (t.y - TL_Y) / trRowH(), i = tracksTop + r;
+  if (flickedY(t, dir)) { scroll(dir); return; }
+  if (!t.wasClicked() || t.x < tlX() - 4 || t.y < listTop() - 4) return;  // the header does nothing
+  int r = (t.y - listTop()) / trRowH(), i = tracksTop + r;
   if (r >= trRows() || i >= (int)viewTracks.size()) return;
   buzz();
   if (viewAlbum == playAlbum && i == current) showScreen(Screen::Player);  // the song that's on: its page
