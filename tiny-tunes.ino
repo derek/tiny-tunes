@@ -2780,15 +2780,20 @@ static void serviceSnack() {
   drawSnack();
 }
 
-// Battery and charger news for the snackbar, checked every few seconds.
+// Battery and charger news for the snackbar, checked every few seconds (and kept for
+// Home's battery mark).
+static int batPct = -1;       // -1: not read yet
+static bool batUsb = false;   // plugged in
 static void watchPower() {
   static uint32_t last = 0;
   static bool first = true, wasUsb = true, fullShown = false;
   static int warned = 101;  // lowest warning given since the last charge
-  if (millis() - last < 5000) return;
+  if (!first && millis() - last < 5000) return;
   last = millis();
   int pct = M5.Power.getBatteryLevel();
   bool usb = usbPower();
+  batPct = pct;
+  batUsb = usb;
   if (first) { first = false; wasUsb = usb; fullShown = usb && pct >= 100; }
   if (usb) {
     warned = 101;
@@ -2919,6 +2924,88 @@ static void drawHouse(int cx, int cy, uint16_t c, uint16_t bg) {
 
 static bool navHasBack() { return screen != Screen::Shelves; }
 
+// ----- Home's top bar -----
+// After the house: whose it is ("Ellie"), the time in the middle (when the clock has
+// been set), and on the right headphones while they're connected (WiFi mode: a WiFi
+// mark) and the battery: white, red under 20%, green with a bolt while charging.
+static void iconBatteryBig(int x, int y, int pct, bool charging, uint16_t bg) {  // top-left; 32 x 16
+  auto& d = M5.Display;
+  uint16_t c = !charging && pct < 20 ? rgb(240, 80, 110) : C_WHITE;
+  d.fillRoundRect(x, y, 29, 16, 4, c);
+  d.fillRoundRect(x + 2, y + 2, 25, 12, 3, bg);
+  d.fillRoundRect(x + 29, y + 5, 3, 6, 1, c);
+  d.fillRoundRect(x + 4, y + 4, std::max(3, 21 * constrain(pct, 0, 100) / 100), 8, 2, charging ? C_GREEN : c);
+  if (charging) {  // a bolt across it
+    d.fillTriangle(x + 16, y + 1, x + 9, y + 9, x + 15, y + 9, bg);
+    d.fillTriangle(x + 13, y + 15, x + 20, y + 7, x + 14, y + 7, bg);
+    d.fillTriangle(x + 16, y + 3, x + 11, y + 8, x + 15, y + 8, C_WHITE);
+    d.fillTriangle(x + 13, y + 13, x + 18, y + 8, x + 14, y + 8, C_WHITE);
+  }
+}
+static void iconWifi(int cx, int cy, uint16_t c) {  // the dot at cx, cy + 6
+  auto& d = M5.Display;
+  d.fillCircle(cx, cy + 6, 2, c);
+  d.fillArc(cx, cy + 6, 7, 5, 225, 315, c);
+  d.fillArc(cx, cy + 6, 12, 10, 225, 315, c);
+  d.fillArc(cx, cy + 6, 17, 15, 225, 315, c);
+}
+
+static bool statusLink() {  // headphones (Bluetooth mode) or WiFi (WiFi mode) to show
+#if CORE2_WIFI
+  return true;  // WiFi mode always shows its mark (dim while not connected)
+#else
+  return btConnected;
+#endif
+}
+static uint32_t homeStatusKey() {  // changes when anything in the bar would
+  int h = -1, m = 0;
+  bool clock = rtcNow(h, m);
+#if CORE2_WIFI
+  bool link = webUp;
+#else
+  bool link = btConnected;
+#endif
+  return ((clock ? h * 60 + m + 1 : 0) << 12) ^ ((batPct + 1) << 3) ^ (batUsb << 1) ^ link;
+}
+static uint32_t homeStatusShown = 0;
+
+static void drawHomeStatus(uint16_t bar) {
+  auto& d = M5.Display;
+  homeStatusShown = homeStatusKey();
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  d.setTextColor(C_WHITE);
+  int h, m, clockW = 0;
+  if (rtcNow(h, m)) {
+    char t[8];
+    snprintf(t, sizeof t, "%d:%02d", h % 12 ? h % 12 : 12, m);
+    d.setTextDatum(middle_center);
+    d.drawString(t, 160, NAV_CY + 1);
+    clockW = d.textWidth(t);
+  }
+  if (owner.length()) {
+    int nx = NB_X + 20, room = (clockW ? 160 - clockW / 2 - 14 : 220) - nx;
+    d.setTextDatum(middle_left);
+    d.drawString(fitLine(owner, room), nx, NAV_CY + 1);
+  }
+  int bx = 312 - 32;
+  if (batPct >= 0) iconBatteryBig(bx, NAV_CY - 8, batPct, batUsb, bar);
+  if (statusLink()) {
+#if CORE2_WIFI
+    iconWifi(bx - 22, NAV_CY - 3, webUp ? C_WHITE : C_DIM);
+#else
+    iconHeadphones(bx - 20, NAV_CY - 8, C_WHITE);
+#endif
+  }
+}
+
+// Home's bar again when the minute, the battery or the headphones change.
+static void tickHomeStatus(uint32_t now) {
+  static uint32_t last = 0;
+  if (screen != Screen::Shelves || screenOff || now - last < 1000) return;
+  last = now;
+  if (homeStatusKey() != homeStatusShown) drawNavBar(0);
+}
+
 // Top right on every screen: three sound bars, bouncing on green while something plays,
 // still and grey when it's paused (or nothing is loaded). Tap it for the player.
 // Not on Home: its Keep listening card does that job (and flies up into this button
@@ -2963,6 +3050,7 @@ static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's
   d.fillRect(0, 0, 320, NAV_H, bar);
   if (level == 0) {
     drawHouse(NB_X, NAV_CY, C_WHITE, bar);
+    drawHomeStatus(bar);
   } else {
     drawRound(NB_X, NAV_CY - 1, NB_R, bar == C_BAR ? C_OFF : mix565(bar, C_SHADE, 1, 3));  // on a colored bar: a darker shade of it
     iconArrow(NB_X - 1, NAV_CY - 1, 0, C_WHITE);
@@ -4445,6 +4533,7 @@ void loop() {
     drawNowPlayingButton(true);  // the green button's bars dance while music plays
   }
   tickKeepTitle(now);  // Home: Keep listening's long title scrolls
+  tickHomeStatus(now);  // Home: the clock, battery and headphones in the top bar
   if (litControl >= 0 && (int32_t)(now - litUntil) >= 0) {
     if (screen == Screen::Player && !dimmed) drawControl(litControl, false);
     litControl = -1;

@@ -23,6 +23,9 @@ everything on it chosen by a grown-up.
   whole book, with a tick between chapters.
 - **The player** has quieter / previous / play / next / louder, and a bar to drag. Swipe
   for the next or previous track.
+- **Home's top bar** has the owner's name, the time, and on the right headphones (when
+  connected; WiFi mode: a WiFi mark) and the battery (red when low, a bolt when
+  charging).
 - **The top bar** has back on the left, the shelf's name, and on the right the
   now-playing button: its bars bounce on green while something plays; tap it for the
   player. Home doesn't have it (Keep listening does that job): leaving Home for a shelf,

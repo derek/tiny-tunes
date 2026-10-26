@@ -18,6 +18,10 @@ e.g. `0.3.0+6.cb61af8`.
   while something plays (a play triangle when paused).
 - The top bar is in the shelf's own color, as on Home (Music blue, Pods purple, Books
   orange), on its albums, songs and player.
+- Home's top bar: whose it is ("Ellie") after the house, the time in the middle (once
+  the clock has been set), and on the right headphones while they're connected (a WiFi
+  mark in WiFi mode) and the battery: white, red under 20%, green with a bolt while
+  charging.
 - Albums are A to Z again (the carousel goes round, so order matters less), and a
   shelf opens on the album opened or played most recently there. Opening an album's
   songs now counts as recent, not only playing it.
