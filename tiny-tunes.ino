@@ -3004,10 +3004,10 @@ static void watchPower() {
 // (it goes round and round with three or more), tap a side cover to turn to it, tap the
 // middle to open it. The ones played most recently come first, then the rest A to Z.
 // The playing album gets a ring and a badge, podcasts with new episodes a dot.
-static constexpr int CV_X = 160 - CV_BIG / 2, CV_Y = NAV_H + 10, CV_GAP = 14;
+static constexpr int CV_X = 160 - CV_BIG / 2, CV_Y = NAV_H + 16, CV_GAP = 14;
 static constexpr int CV_SIDE_Y = CV_Y + (CV_BIG - CV_SIDE) / 2;
 static constexpr int CV_LEFT_X = CV_X - CV_GAP - CV_SIDE, CV_RIGHT_X = CV_X + CV_BIG + CV_GAP;
-static constexpr int CV_NAME_Y = CV_Y + CV_BIG + 18;
+static constexpr int CV_NAME_Y = CV_Y + CV_BIG + 24;  // the name's first line (a two-line name starts a little higher)
 
 static int viewShelf = 0;
 static std::vector<int> shelfAlbums;  // indexes into albums for viewShelf
@@ -3060,7 +3060,7 @@ static void drawCarousel() {
   auto lines = wrapText(albums[a].name, 296, 2);
   d.setTextDatum(middle_center);
   d.setTextColor(C_WHITE);
-  int y = CV_NAME_Y;
+  int y = lines.size() > 1 ? CV_NAME_Y - 5 : CV_NAME_Y;
   for (auto& l : lines) { d.drawString(l, 160, y); y += 23; }
   const String& who = albums[a].albumArtist;
   if (who.length() && who != albums[a].name) {
@@ -3229,7 +3229,7 @@ static void handleShelves(const m5::touch_detail_t& t) {
 // The header sits at the top of the list like its first item: scrolled down, it's gone
 // and the rows use the whole screen under the top bar.
 static constexpr int TH_X = P_COVER_X, TH_Y = P_COVER_Y, TL_Y = TH_Y + CV_HEAD + 8, TL_FULL_Y = NAV_H + 6, TL_X = 8, TL_W = 298;
-static int trRowH() { return isPodcastAlbum(viewAlbum) ? 42 : 32; }
+static int trRowH() { return isPodcastAlbum(viewAlbum) ? 42 : 38; }  // three under the header
 static int listTopFor(int top) { return top == 0 ? TL_Y : TL_FULL_Y; }    // where the rows start
 static int rowsFor(int top) { return (242 - listTopFor(top)) / trRowH(); }  // 4 under the header, 6 without (podcasts 3, 4)
 static int listTop() { return listTopFor(tracksTop); }
@@ -3363,10 +3363,10 @@ static void drawTrackRows() {
         d.setFont(&fonts::FreeSansBold12pt7b);
         d.drawString(String(i + 1), tlX() + 24, my);
       }
-      d.setFont(&fonts::DejaVu12);
+      d.setFont(&fonts::FreeSansBold9pt7b);
       int tx = tlX() + 54, tw = tlW() - 54 - 18;
       auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
-      int lh = 14, ty = my - (int)(lines.size() - 1) * lh / 2;
+      int lh = 16, ty = my - (int)(lines.size() - 1) * lh / 2;
       d.setTextDatum(middle_left);
       d.setTextColor(C_WHITE);
       for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
@@ -3377,17 +3377,18 @@ static void drawTrackRows() {
     d.fillCircle(nx, my, 12, playing ? C_WHITE : C_OFF);
     if (playing) iconPlaying(nx, my, ac);
     else {
-      d.setFont(n > 99 ? &fonts::DejaVu9 : &fonts::DejaVu12);
+      if (n > 99) d.setFont(&fonts::DejaVu12);
+      else d.setFont(&fonts::FreeSansBold9pt7b);
       d.setTextDatum(middle_center);
       d.setTextColor(C_WHITE);
       d.drawString(String(i + 1), nx, my);
     }
     int tx = tlX() + 42, tw = tlW() - 42 - (isResumable(viewAlbum) ? 26 : 14);
-    d.setFont(&fonts::DejaVu12);  // one size for every title; long ones take two lines
+    d.setFont(&fonts::FreeSansBold9pt7b);  // one size for every title; long ones take two lines
     d.setTextDatum(middle_left);
     d.setTextColor(C_WHITE);
     auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
-    int lh = 14, ty = my - (int)(lines.size() - 1) * lh / 2;
+    int lh = 16, ty = my - (int)(lines.size() - 1) * lh / 2;
     for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
     drawProgressMark(i, tx, tlX() + tlW() - 8, y, h, playing);
   }

@@ -6,6 +6,12 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.4 — 2026-10-26
+
+### Changed
+- The album carousel sits a little lower, with more room between the cover and the name.
+- The song list's titles are bigger; three songs show under the cover (five scrolled).
+
 ## 0.9.3 — 2026-10-26
 
 ### Added
