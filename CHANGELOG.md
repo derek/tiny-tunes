@@ -6,6 +6,16 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+### Fixed
+- The speaker's amplifier is switched off while Bluetooth plays (it stayed on, drawing
+  power just as the radio started sending: a likely cause of restarts on connecting to
+  a speaker, on battery).
+
+### Added
+- Grown-ups → Stats (third page) shows the last crash: a crash, a freeze or a power
+  dip, whether Bluetooth was on and something was playing, and how many times. The
+  serial port reports the reset reason at boot (`BOOT reset ...`).
+
 ### Added
 - Color themes, picked on the grown-ups screen (Settings → Colors, tap either side to
   step through): Forest (new, the default: deep green with berry, teal and honey

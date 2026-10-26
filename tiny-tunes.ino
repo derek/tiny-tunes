@@ -141,6 +141,10 @@ static Preferences prefs;
 // libatomic helpers into IRAM, which the BT build has no room for.
 static volatile bool btConnected = false;  // always false in the WiFi build
 static volatile bool ringFlushReq = false;
+// What it was doing, kept through a crash or watchdog reset (not a power-off), so the
+// next boot can say whether Bluetooth audio was running: see noteLastRestart().
+RTC_NOINIT_ATTR static uint32_t rtcCrumb;
+static constexpr uint32_t CRUMB_MAGIC = 0x7A7E0000;
 
 #if !CORE2_WIFI
 // The core's libc puts gmtime_r/localtime_r in IRAM (PSRAM cache workaround),
@@ -289,6 +293,9 @@ class AudioOutputRouter : public AudioOutput {
     return false;
   }
   void flushSpeaker() {
+#if !CORE2_WIFI
+    if (btConnected) { _idx = 0; return; }  // leftovers from before Bluetooth: playing them would switch the amp back on
+#endif
     if (_idx) {
       _spk->playRaw(_buf[_tri], _idx, hertz, true, 1, _ch);
       _tri = (_tri + 1) % 3;
@@ -3625,6 +3632,33 @@ static void drawStatTile(int col, int row, const String& label, const String& va
   d.drawString(fitLine(value, w - 16), x + 10, y + 14);
 }
 
+// ----- why it last restarted -----
+// A crash, a watchdog (frozen) or a brownout (the battery dipping) is remembered with
+// what was going on, for grown-ups -> Stats; the serial port says it at boot too.
+static String restartText() {
+  int why = prefs.getUChar("rstwhy", 0), n = prefs.getUShort("rstn", 0), crumb = prefs.getUChar("rstcrumb", 0);
+  if (!n) return "None";
+  const char* what = why == ESP_RST_BROWNOUT ? "Power dip" : why == ESP_RST_PANIC ? "Crash" : "Froze";
+  String s = what;
+  if (crumb & 1) s += ", Bluetooth on";
+  if (crumb & 2) s += ", playing";
+  return s + " (" + String(n) + "x)";
+}
+
+static void noteLastRestart() {
+  esp_reset_reason_t why = esp_reset_reason();
+  bool bad = why == ESP_RST_PANIC || why == ESP_RST_INT_WDT || why == ESP_RST_TASK_WDT || why == ESP_RST_WDT ||
+             why == ESP_RST_BROWNOUT;
+  uint32_t crumb = (rtcCrumb & 0xFFFF0000) == CRUMB_MAGIC ? rtcCrumb & 0xFF : 0;
+  if (bad) {
+    prefs.putUChar("rstwhy", why);
+    prefs.putUChar("rstcrumb", crumb);
+    prefs.putUShort("rstn", prefs.getUShort("rstn", 0) + 1);
+  }
+  Serial.printf("BOOT reset %d%s crumb %u\n", (int)why, bad ? " (bad)" : "", (unsigned)crumb);
+  rtcCrumb = CRUMB_MAGIC;
+}
+
 static void drawStats() {
   auto& d = M5.Display;
   d.fillRect(0, GU_BODY_Y, 320, 240 - GU_BODY_Y, C_BG);
@@ -3672,7 +3706,7 @@ static void drawStats() {
     drawStatTile(1, 0, "LOWEST FREE RAM", String(ESP.getMinFreeHeap() / 1024) + " KB", C_DIM);
     drawStatTile(0, 1, "FLASH", String(ESP.getFlashChipSize() >> 20) + " MB, running " + String(run ? run->label : "?"), C_DIM);
     drawStatTile(1, 1, "PSRAM", fixed(ESP.getPsramSize() / 100000, 10, 1) + " MB total", C_DIM);
-    drawStatTile(0, 2, "FIRMWARE SIZE", fixed(ESP.getSketchSize() / 100000, 10, 1) + " MB", C_DIM);
+    drawStatTile(0, 2, "LAST CRASH", restartText(), C_DIM);
     drawStatTile(1, 2, "BUILT", String(__DATE__) + " " + String(__TIME__).substring(0, 5), C_DIM);
     drawStatTile(0, 3, "MEMORY FREE", String(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024) + " KB + " +
                  fixed(ESP.getFreePsram() / 100000, 10, 1) + " MB PSRAM", C_BLUE, true);
@@ -4453,6 +4487,7 @@ void setup() {
   M5.Display.setRotation(ROTATION);
   M5.Touch.setFlickThresh(16);  // a tap may move a little before it counts as a swipe (default 8 px)
   prefs.begin("core2mp3");  // settings namespace from the project's first name; renaming it would reset them
+  noteLastRestart();
   bool nightBoot = prefs.getUChar("nightboot", 0);  // a quiet reboot for the nightly podcast sync
   M5.Display.setBrightness(nightBoot ? 0 : 140);   // the saved brightness is applied below
   M5.Display.fillScreen(C_BG);
@@ -4573,8 +4608,10 @@ void loop() {
   }
   if (btStateDirty) {
     btStateDirty = false;
-    if (btConnected) M5.Speaker.stop(SPK_CH);
-    else btHasTarget = false;
+    // the speaker's amplifier off while Bluetooth plays (no point drawing power for
+    // it just as the radio starts sending), on again when the headphones go
+    if (btConnected) { M5.Speaker.stop(SPK_CH); M5.Speaker.end(); }
+    else { btHasTarget = false; M5.Speaker.begin(); }
     // Headphones gone (switched off, out of range): pause rather than carry on out loud
     snackPaused = !btConnected && current >= 0 && !paused;
     if (snackPaused) togglePause();
@@ -4584,6 +4621,7 @@ void loop() {
   }
 #endif
 
+  rtcCrumb = CRUMB_MAGIC | (btConnected ? 1 : 0) | (musicIsPlaying() ? 2 : 0);  // for noteLastRestart()
   handleInput();
   buzzService();
   nightlyCheck();
