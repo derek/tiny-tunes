@@ -23,6 +23,7 @@ e.g. `0.3.0+6.cb61af8`.
   mark in WiFi mode) and the battery: white, red under 20%, green with a bolt while
   charging.
 - The top bar's words (the name, the time, the shelf) are in the smaller font.
+- Home's cards are flat (no white edge).
 - Albums are A to Z again (the carousel goes round, so order matters less), and a
   shelf opens on the album opened or played most recently there. Opening an album's
   songs now counts as recent, not only playing it.

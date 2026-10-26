@@ -2497,11 +2497,9 @@ static void drawShelfIcon(ShelfKind kind, int cx, int cy, uint16_t c, uint16_t b
 }
 
 // ----- cards and album art -----
-// A flat, white-edged card (Home's shelves).
+// A flat card (Home's shelves and Keep listening).
 static void drawCardFrame(int x, int y, int w, int h, uint16_t fill) {
-  auto& d = M5.Display;
-  d.fillRoundRect(x, y, w, h, 13, C_WHITE);
-  d.fillRoundRect(x + 4, y + 4, w - 8, h - 8, 9, fill);
+  M5.Display.fillRoundRect(x, y, w, h, 13, fill);  // flat: no edge
 }
 
 // Centered text in one font size (bold 9 pt), wrapped over up to
