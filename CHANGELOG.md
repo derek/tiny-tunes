@@ -6,6 +6,12 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.7 — 2026-10-26
+
+### Changed
+- The player's five buttons are evenly spaced (the same gap between each); taps still
+  go to the nearest one, anywhere in the row.
+
 ## 0.9.6 — 2026-10-26
 
 ### Fixed

@@ -2460,9 +2460,9 @@ static constexpr int CV_BIG = 116, CV_SIDE = 76, CV_HEAD = 60;
 // left, and a progress bar to drag: the song, or for books the whole book (a tick between
 // chapters). Swipe for the next / previous track too.
 static constexpr int P_COVER_X = 12, P_COVER_Y = NAV_H + 8, P_COVER = CV_HEAD, P_CTRL_Y = 158;  // = the song list's header
-// Five equal columns, 64 px (8 mm) wide; a tap anywhere in a column, the full height of the
-// row, is that button. Quieter, previous, play, next, louder.
-static constexpr RoundButton B_QUIET{32, 24}, B_PREV{96, 26}, B_PLAY{160, 34}, B_NEXT{224, 26}, B_LOUD{288, 24};
+// Quieter, previous, play, next, louder, with the same 16 px gap between each. A tap
+// anywhere in the row, its full height, goes to the nearest button (columns ~64 px wide).
+static constexpr RoundButton B_QUIET{31, 21}, B_PREV{91, 23}, B_PLAY{160, 30}, B_NEXT{229, 23}, B_LOUD{289, 21};
 static constexpr int P_ROW_TOP = P_CTRL_Y - 42, P_ROW_BOTTOM = P_CTRL_Y + 42;
 static constexpr int VOL_DOTS_Y = 204, P_LABEL_Y = 205;               // the level under play, labels either side
 static constexpr int PB_X = 22, PB_Y = 220, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
@@ -2817,7 +2817,7 @@ static void drawControl(int i, bool lit) {
   bool vol = i == 0 || i == 4;
   drawRound(b.x, P_CTRL_Y, b.r, lit ? (vol ? rgb(100, 108, 160) : rgb(110, 195, 245)) : (vol ? C_OFF : C_BLUE));
   if (vol) iconSpeakerWaves(b.x, P_CTRL_Y, i == 4 ? 2 : 0, C_WHITE);
-  else iconSkip(b.x, P_CTRL_Y, 24, i == 3, C_WHITE);
+  else iconSkip(b.x, P_CTRL_Y, 22, i == 3, C_WHITE);
 }
 
 static int litControl = -1;      // lit by a tap, until litUntil
@@ -3849,7 +3849,9 @@ static void handlePlayer(const m5::touch_detail_t& t) {
   if (flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }  // swipe left = next song, right = previous
   if (!t.wasClicked()) return;
   if (t.y < P_ROW_TOP || t.y >= P_ROW_BOTTOM) return;
-  int i = constrain(t.x / 64, 0, 4);  // the column it landed in
+  static const int CX[5] = {B_QUIET.x, B_PREV.x, B_PLAY.x, B_NEXT.x, B_LOUD.x};
+  int i = 0;  // the nearest button
+  for (int k = 1; k < 5; k++) if (abs(t.x - CX[k]) < abs(t.x - CX[i])) i = k;
   buzz();
   drawControl(i, true);  // lit for a moment (a new song or play / pause redraws the row anyway)
   litControl = i;
