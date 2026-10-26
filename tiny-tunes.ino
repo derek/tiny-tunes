@@ -4050,6 +4050,10 @@ static void handleIdle() {
 //   WIFI <ssid>\t<pass>  -> saves credentials, replies "OK"
 //   MODE <bt|wifi>       -> "OK", rebooting into that mode if not already in it
 //   NAME [<name>]        -> sets (or, empty, clears) the owner's name, "OK"
+//   LOAD <album>         -> loads the first album whose name contains <album> (paused), "OK"
+//   SHOW <screen>        -> home | albums [<shelf>] | songs | player | grownups, "OK"
+//   SHOT                 -> "SHOT 320 240", the screen as raw RGB565 rows, then "END"
+//                           (LOAD, SHOW and SHOT are for screenshot.py)
 // The WiFi build prints "IP <addr>" when it joins the network.
 static constexpr size_t UP_CHUNK = 2048;
 
@@ -4181,6 +4185,45 @@ static void handleSerial() {
     }
     M5.Rtc.setDateTime(m5::rtc_datetime_t{{(int16_t)v[0], (int8_t)v[1], (int8_t)v[2], (int8_t)v[6]}, {(int8_t)v[3], (int8_t)v[4], (int8_t)v[5]}});
     Serial.println("OK");
+  } else if (line.startsWith("LOAD ")) {  // an album, paused (screenshots)
+    String want = lowerStr(line.substring(5));
+    want.trim();
+    int a = -1;
+    for (size_t i = 0; i < albums.size() && a < 0; i++)
+      if (lowerStr(albums[i].name).indexOf(want) >= 0) a = i;
+    if (a < 0) { Serial.println("ERR no such album"); return; }
+    stopPlayback();
+    playAlbum = a;
+    tracks = listTracks(a);
+    current = tracks.empty() ? -1 : isBook(a) ? bookResumeChapter(a) : 0;
+    if (current >= 0) { title = trackTitle(tracks[current], a); artist = guessArtist(a, tracks[current]); }
+    paused = true;
+    dirtyAll = true;
+    Serial.println("OK");
+  } else if (line.startsWith("SHOW ")) {  // a screen (screenshots)
+    String what = lowerStr(line.substring(5));
+    what.trim();
+    if (what == "home") showScreen(Screen::Shelves);
+    else if (what.startsWith("albums")) {
+      String sh = what.substring(6);
+      sh.trim();
+      int k = playAlbum >= 0 ? albums[playAlbum].shelf : 0;
+      for (size_t i = 0; i < shelves.size(); i++)
+        if (sh.length() && lowerStr(shelves[i].name) == sh) k = i;
+      openShelf(k, playAlbum);
+    } else if (what == "songs" && playAlbum >= 0) openTracks(playAlbum);
+    else if (what == "player") showScreen(Screen::Player);
+    else if (what == "grownups") { guTab = 0; beforeGrownups = screen; showScreen(Screen::Grownups); }
+    else { Serial.println("ERR bad screen"); return; }
+    Serial.println("OK");
+  } else if (line == "SHOT") {  // what's on the screen, read back from the display
+    static uint16_t row[320];
+    Serial.println("SHOT 320 240");
+    for (int y = 0; y < 240; y++) {
+      M5.Display.readRect(0, y, 320, 1, row);
+      Serial.write((const uint8_t*)row, sizeof row);
+    }
+    Serial.println("END");
   } else if (line == "NAME" || line.startsWith("NAME ")) {
     setOwner(line.substring(4));
     Serial.println("OK");

@@ -6,6 +6,12 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.3 — 2026-10-26
+
+### Added
+- `screenshot.py`: screenshots read back from the device's display over USB (one, or the
+  README's set with `--tour`), using new `LOAD`, `SHOW` and `SHOT` serial commands.
+
 ## 0.9.2 — 2026-10-25
 
 ### Changed
