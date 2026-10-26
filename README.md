@@ -7,13 +7,14 @@ everything on it chosen by a grown-up.
 
 | Home | Albums | Songs | Player |
 |---|---|---|---|
-| ![Home: Keep listening, then Podcasts, Music and Books](docs/screenshots/home.png) | ![Albums: a carousel of covers](docs/screenshots/albums.png) | ![Songs: the album's cover and its songs](docs/screenshots/songs.png) | ![The player](docs/screenshots/player.png) |
+| ![Home: Keep listening, then Pods, Music and Books](docs/screenshots/home.png) | ![Albums: a carousel of covers](docs/screenshots/albums.png) | ![Songs: the album's cover and its songs](docs/screenshots/songs.png) | ![The player](docs/screenshots/player.png) |
 
 ## Using it
 
-- **Home** (the middle touch button below the screen) shows the shelves: Podcasts, Music
-  and Books. Podcasts says how many episodes are new. Above them, **Keep listening** has
-  whatever was playing last: one tap carries on and opens the player.
+- **Home** (the middle touch button below the screen) shows the shelves side by side:
+  Pods (podcasts, with a yellow badge counting the new episodes), Music and Books.
+  Above them, **Keep listening** has whatever was playing last: one tap carries on and
+  opens the player.
 - **Albums** are a carousel of covers: swipe left and right, round and round. The ones
   played most recently come first. Tap the middle one to open it.
 - **Songs** play when tapped; the list stays put. Tap the song that's playing for the
@@ -22,8 +23,8 @@ everything on it chosen by a grown-up.
   whole book, with a tick between chapters.
 - **The player** has quieter / previous / play / next / louder, and a bar to drag. Swipe
   for the next or previous track.
-- **The top bar** has back on the left and, on the right, the now-playing button: its bars
-  bounce on green while something plays; tap it for the player.
+- **The top bar** has back on the left and the shelf's name. (The now-playing button on
+  its right is switched off for now: `SHOW_NOW_PLAYING_BUTTON` in `tiny-tunes.ino`.)
 - **Snackbars** at the bottom say when the battery is low, it's charging, or headphones
   connect. When headphones disconnect, the sound pauses rather than carrying on out
   loud.

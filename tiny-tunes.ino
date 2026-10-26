@@ -1447,7 +1447,7 @@ static void rescanLibrary(bool keepPlaying) {
   shelves.clear();
   // the three known shelves first, in this order; they stay even when empty (other
   // shelves only exist when they hold albums)
-  addShelf("Podcasts", "/podcasts", ShelfKind::Podcasts);
+  addShelf("Pods", "/podcasts", ShelfKind::Podcasts);  // short, to fit Home's card
   int music = addShelf("Music", "/music", ShelfKind::Music);
   addShelf("Books", "/books", ShelfKind::Books);
   std::vector<String> top;
@@ -2916,7 +2916,9 @@ static bool navHasBack() { return screen != Screen::Shelves; }
 
 // Top right on every screen: three sound bars, bouncing on green while something plays,
 // still and grey when it's paused (or nothing is loaded). Tap it for the player.
+static constexpr bool SHOW_NOW_PLAYING_BUTTON = false;  // hidden while Home's Keep listening card is tried out
 static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random bar heights
+  if (!SHOW_NOW_PLAYING_BUTTON) return;
   static uint8_t heights[3] = {9, 15, 12};
   static uint32_t seed = 88675123;  // xorshift; libc rand() costs IRAM
   auto& d = M5.Display;
@@ -2957,6 +2959,7 @@ static void openTracks(int a);
 static bool handleNavBar(const m5::touch_detail_t& t) {
   if (!t.wasClicked() || t.y >= NAV_H + 6) return false;
   if (t.x >= VB_X - 10) {  // the now-playing button (on the player: already there)
+    if (!SHOW_NOW_PLAYING_BUTTON) return true;
     if (screen != Screen::Player && haveNowPlaying()) { buzz(); showScreen(Screen::Player); }
     return true;
   }
@@ -2973,23 +2976,28 @@ static bool handleNavBar(const m5::touch_detail_t& t) {
 }
 
 // ----- shelves: the library's top level (Home) -----
-// A list of wide cards, one per shelf (Podcasts, Music, Books, then any other), above
-// each with the shelf's picture and name, and on the right how many podcast
-// episodes are new. When something's loaded, a "Keep listening" card above them
-// (its cover, its title, a play button) picks it up again in one tap.
+// A "Keep listening" card at the top when something's loaded (its cover, its title, a
+// play button: one tap picks it up again), and below it the shelves side by side
+// (Podcasts, Music, Books, then any other; three to a row), each a card with the
+// shelf's picture over its name, and a yellow badge with the new podcast episodes.
+// With nothing loaded, the shelves sit in the middle of the screen.
 static constexpr int SH_TOP = NAV_H + 6, SH_BOTTOM = 234, SH_GAP = 6;
 static constexpr int KL_X = 8, KL_Y = SH_TOP, KL_W = 304, KL_H = CV_HEAD + 8;
 static bool homeTileShown = false;  // whether Home was last drawn with the card
 
-static bool homeTile() { return haveNowPlaying() && playAlbum >= 0 && shelves.size() <= 4; }
+static constexpr int SH_ROW_TOP = KL_Y + KL_H + SH_GAP;  // the shelves' top under the card
+
+static bool homeTile() { return haveNowPlaying() && playAlbum >= 0; }
 
 static void shelfTileRect(int i, int& x, int& y, int& w, int& h) {
   int n = std::max(1, std::min((int)shelves.size(), 6));
-  int top = homeTile() ? KL_Y + KL_H + SH_GAP : SH_TOP;
-  h = std::min(62, (SH_BOTTOM - top - (n - 1) * SH_GAP) / n);
-  w = 304;
-  x = 8;
-  y = top + i * (h + SH_GAP);
+  int cols = std::min(n, 3), rows = (n + 2) / 3;
+  int area = SH_BOTTOM - SH_ROW_TOP;  // the same size with or without the card
+  int top = homeTile() ? SH_ROW_TOP : SH_TOP + (SH_BOTTOM - SH_TOP - area) / 2;
+  w = (304 - (cols - 1) * SH_GAP) / cols;
+  h = (area - (rows - 1) * SH_GAP) / rows;
+  x = 8 + (i % 3) * (w + SH_GAP);
+  y = top + (i / 3) * (h + SH_GAP);
 }
 
 static void drawKeepListening() {
@@ -3025,26 +3033,23 @@ static void drawShelves() {
     shelfTileRect(i, x, y, w, h);
     uint16_t c = shelfColor(sh);
     drawCardFrame(x, y, w, h, c);
-    int cy = y + h / 2 + 1, tx = x + 20;
-    if (h >= 46) {  // room for the picture, with space around it (lots of shelves: just names)
-      drawShelfIcon(sh.kind, x + 46, cy, C_WHITE, c, 66);
-      tx = x + 86;
-    } else if (h >= 30) {  // under the Keep listening card: a smaller picture
-      drawShelfIcon(sh.kind, x + 34, cy, C_WHITE, c, (h - 8) * 100 / 56);
-      tx = x + 62;
+    int cx = x + w / 2, ny = y + h / 2 + 1;
+    if (h >= 90) {  // the picture over the name (two rows of shelves: just names)
+      drawShelfIcon(sh.kind, cx, y + h / 2 - 8, C_WHITE, c, std::min(90, w * 80 / 100));
+      ny = y + h - 20;
     }
-    d.setFont(h >= 30 ? &fonts::FreeSansBold12pt7b : &fonts::FreeSansBold9pt7b);
-    d.setTextDatum(middle_left);
+    d.setFont(&fonts::FreeSansBold12pt7b);
+    if (d.textWidth(sh.name) > w - 14) d.setFont(&fonts::FreeSansBold9pt7b);
+    d.setTextDatum(middle_center);
     d.setTextColor(C_WHITE);
-    d.drawString(fitLine(sh.name, 150), tx, cy);
-    if (sh.newCount > 0) {  // new podcast episodes
-      String n = String(sh.newCount) + " new";
+    d.drawString(fitLine(sh.name, w - 14), cx, ny);
+    if (sh.newCount > 0) {  // new podcast episodes: a badge in the corner
+      String n = String(sh.newCount);
       d.setFont(&fonts::FreeSansBold9pt7b);
-      int bw = d.textWidth(n) + 16;
-      d.fillRoundRect(x + w - bw - 12, cy - 11, bw, 22, 11, C_YELLOW);
-      d.setTextDatum(middle_center);
+      int bw = std::max(24, (int)d.textWidth(n) + 14), bx = x + w - bw - 6, by = y + 7;
+      d.fillRoundRect(bx, by, bw, 24, 12, C_YELLOW);
       d.setTextColor(C_SHADE);
-      d.drawString(n, x + w - 12 - bw / 2, cy + 1);
+      d.drawString(n, bx + bw / 2, by + 13);
     }
   }
 }
@@ -3860,6 +3865,7 @@ static void handleInput() {
 
   // the middle button: Home (the left and right ones only count held together, above)
   if (!afterChord && !chord && M5.BtnB.wasClicked()) {
+    if (screen == Screen::Shelves) return;  // already Home: nothing to do
     if (snackUp()) snackUntil = millis();
     dirtyAll = true;  // repaint even if it stays on the same screen (a snackbar was up)
     goHome();
@@ -4070,7 +4076,7 @@ static void handleSerial() {
       sh.trim();
       int k = playAlbum >= 0 ? albums[playAlbum].shelf : 0;
       for (size_t i = 0; i < shelves.size(); i++)
-        if (sh.length() && lowerStr(shelves[i].name) == sh) k = i;
+        if (sh.length() && (lowerStr(shelves[i].name) == sh || lowerStr(shelves[i].path) == "/" + sh)) k = i;  // "pods" or "podcasts"
       openShelf(k, playAlbum);
     } else if (what == "songs" && playAlbum >= 0) {
       shrinkFromCarousel = screen == Screen::Albums;  // from the carousel: with its animation, like a tap
