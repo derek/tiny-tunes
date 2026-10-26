@@ -2274,6 +2274,8 @@ static constexpr int P_ROW_TOP = P_CTRL_Y - 42, P_ROW_BOTTOM = P_CTRL_Y + 42;
 static constexpr int VOL_DOTS_Y = 204, P_LABEL_Y = 205;               // the level under play, labels either side
 static constexpr int PB_X = 22, PB_Y = 220, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
 static constexpr int VB_X = 244, VB_Y = 5, VB_W = 68, VB_H = 26;  // the top bar's now-playing button
+static constexpr int KL_X = 8, KL_Y = NAV_H + 6, KL_W = 304, KL_H = CV_HEAD + 8;  // Home's Keep listening card...
+static constexpr int KL_BX = KL_X + KL_W - 34, KL_BY = KL_Y + KL_H / 2, KL_BR = 21;  // ...and its round button
 
 static uint32_t lastTouchMs = 0;
 static bool dimmed = false;
@@ -2881,6 +2883,7 @@ static void drawCarousel() {
   for (auto& l : lines) { d.drawString(l, 160, y); y += 23; }
 }
 
+static uint16_t navBarColor = C_BAR;  // what the top bar was last painted with
 static bool flyingFromHome = false;  // Home -> a shelf: Keep listening's cover is on its way to the now-playing button
 static void flyToNowPlaying();      // see "shelves"
 static void drawNowPlayingButton(bool bounce);
@@ -2927,16 +2930,30 @@ static bool navHasBack() { return screen != Screen::Shelves; }
 // still and grey when it's paused (or nothing is loaded). Tap it for the player.
 // Not on Home: its Keep listening card does that job (and flies up into this button
 // when Home is left for a shelf).
+static bool homeTile();  // see "shelves"
+static uint16_t mix565(uint16_t a, uint16_t b, int f, int n) {  // f/n of the way from a to b
+  int r = ((a >> 11) * (n - f) + (b >> 11) * f) / n, g = (((a >> 5) & 63) * (n - f) + ((b >> 5) & 63) * f) / n,
+      bl = ((a & 31) * (n - f) + (b & 31) * f) / n;
+  return (r << 11) | (g << 5) | bl;
+}
 static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random bar heights
-  if (screen == Screen::Shelves || flyingFromHome) return;
+  if (flyingFromHome) return;
+  bool home = screen == Screen::Shelves;  // on Home: the round button on the Keep listening card
+  if (home && !homeTile()) return;
   static uint8_t heights[3] = {9, 15, 12};
   static uint32_t seed = 88675123;  // xorshift; libc rand() costs IRAM
   auto& d = M5.Display;
   bool on = musicIsPlaying();
-  d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, VB_H / 2, on ? C_GREEN : C_OFF);
-  int cx = VB_X + VB_W / 2, cy = VB_Y + VB_H / 2;
   if (bounce && on)
     for (auto& h : heights) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; h = 5 + seed % 13; }
+  int cx = VB_X + VB_W / 2, cy = VB_Y + VB_H / 2;
+  if (home) {
+    d.fillCircle(KL_BX, KL_BY, KL_BR, C_GREEN);
+    if (!on) { iconPlay(KL_BX, KL_BY, 18, C_WHITE); return; }
+    cx = KL_BX; cy = KL_BY + 1;
+  } else {
+    d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, VB_H / 2, on ? C_GREEN : C_OFF);
+  }
   uint16_t ink = on ? C_WHITE : rgb(150, 156, 190);
   for (int i = 0; i < 3; i++) d.fillRoundRect(cx - 11 + i * 8, cy + 8 - heights[i], 5, heights[i], 2, ink);
 }
@@ -2946,11 +2963,13 @@ static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random b
 static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's songs, 3 the player
   auto& d = M5.Display;
   uint16_t bar = C_BAR;
+  if (level == 1 && viewShelf >= 0 && viewShelf < (int)shelves.size()) bar = shelfColor(shelves[viewShelf]);  // the shelf's own color, as on Home
+  navBarColor = bar;
   d.fillRect(0, 0, 320, NAV_H, bar);
   if (level == 0) {
     drawHouse(NB_X, NAV_CY, C_WHITE, bar);
   } else {
-    drawRound(NB_X, NAV_CY - 1, NB_R, C_OFF);
+    drawRound(NB_X, NAV_CY - 1, NB_R, bar == C_BAR ? C_OFF : mix565(bar, C_SHADE, 1, 3));  // on a colored bar: a darker shade of it
     iconArrow(NB_X - 1, NAV_CY - 1, 0, C_WHITE);
     int shelf = level == 1 ? viewShelf : level == 2 ? (viewAlbum >= 0 ? albums[viewAlbum].shelf : -1)
                                                     : (playAlbum >= 0 ? albums[playAlbum].shelf : -1);
@@ -2992,7 +3011,6 @@ static bool handleNavBar(const m5::touch_detail_t& t) {
 // shelf's picture over its name, and a yellow badge with the new podcast episodes.
 // With nothing loaded, the shelves sit in the middle of the screen.
 static constexpr int SH_TOP = NAV_H + 6, SH_BOTTOM = 234, SH_GAP = 6;
-static constexpr int KL_X = 8, KL_Y = SH_TOP, KL_W = 304, KL_H = CV_HEAD + 8;
 static bool homeTileShown = false;  // whether Home was last drawn with the card
 
 static constexpr int SH_ROW_TOP = KL_Y + KL_H + SH_GAP;  // the shelves' top under the card
@@ -3065,7 +3083,7 @@ static void drawKeepListening() {
   bool on = musicIsPlaying();
   drawCardFrame(KL_X, KL_Y, KL_W, KL_H, C_KL);
   drawAlbumArt(playAlbum, KL_X + 4, KL_Y + 4, CV_HEAD);
-  int bx = KL_X + KL_W - 34, cy = KL_Y + KL_H / 2, tx = KL_X + CV_HEAD + 16, tw = bx - 24 - tx;
+  int tx = KL_X + CV_HEAD + 16, tw = KL_BX - KL_BR - 3 - tx;
   d.setTextDatum(middle_left);
   d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextColor(on ? C_GREEN : C_DIM);
@@ -3076,9 +3094,7 @@ static void drawKeepListening() {
     klHoldUntil = millis() + KL_HOLD_MS;
   }
   drawKeepTitle();
-  d.fillCircle(bx, cy, 21, C_GREEN);
-  if (on) iconPlaying(bx, cy, C_WHITE);
-  else iconPlay(bx, cy, 18, C_WHITE);
+  drawNowPlayingButton();  // the round button: dancing bars while it plays
 }
 
 static void drawShelves() {
@@ -3115,27 +3131,27 @@ static void drawShelves() {
   }
 }
 
-// Leaving Home for a shelf: the Keep listening cover shrinks up into the top bar's
-// corner and becomes the now-playing button (the same steps as the carousel's cover
+// Leaving Home for a shelf: Keep listening's round button moves up into the top bar's
+// corner and becomes the now-playing button (in the same steps as the carousel's cover
 // shrinking into the song list).
 static void flyToNowPlaying() {
   auto& d = M5.Display;
-  M5Canvas* cv = getCover(playAlbum, CV_HEAD);
-  const int x0 = KL_X + 4, y0 = KL_Y + 4, s1 = VB_H, x1 = VB_X + VB_W / 2 - s1 / 2, y1 = VB_Y;
-  auto wipe = [&](int x, int y, int s) {  // background below the bar, the bar's color in it
-    int top = y - 2, bottom = y + s + 2;
-    if (bottom > NAV_H) d.fillRect(x - 2, std::max(top, NAV_H), s + 4, bottom - std::max(top, NAV_H), C_BG);
-    if (top < NAV_H) d.fillRect(x - 2, top, s + 4, std::min(bottom, NAV_H) - top, C_BAR);
+  const int x0 = KL_BX - KL_BR, y0 = KL_BY - KL_BR, w0 = 2 * KL_BR, h0 = 2 * KL_BR;
+  uint16_t c1 = musicIsPlaying() ? C_GREEN : C_OFF;
+  auto wipe = [&](int x, int y, int w, int h) {  // background below the bar, the bar's color in it
+    int top = y - 2, bottom = y + h + 2, mid = std::min(std::max(top, NAV_H), bottom);
+    if (bottom > mid) d.fillRect(x - 2, mid, w + 4, bottom - mid, C_BG);
+    if (mid > top) d.fillRect(x - 2, top, w + 4, mid - top, navBarColor);
   };
-  drawAlbumArt(playAlbum, x0, y0, CV_HEAD);
-  int px = x0, py = y0, ps = CV_HEAD;
+  d.fillCircle(KL_BX, KL_BY, KL_BR, C_GREEN);
+  int px = x0, py = y0, pw = w0, ph = h0;
   for (int f = 1; f <= 4; f++) {
-    int sz = CV_HEAD + (s1 - CV_HEAD) * f / 4, x = x0 + (x1 - x0) * f / 4, y = y0 + (y1 - y0) * f / 4;
-    wipe(px, py, ps);
+    int x = x0 + (VB_X - x0) * f / 4, y = y0 + (VB_Y - y0) * f / 4;
+    int w = w0 + (VB_W - w0) * f / 4, h = h0 + (VB_H - h0) * f / 4;
+    wipe(px, py, pw, ph);
     if (f == 4) break;  // the last step is the button itself
-    if (cv) cv->pushRotateZoom(&d, x + sz / 2.0f, y + sz / 2.0f, 0, (float)sz / CV_HEAD, (float)sz / CV_HEAD, COVER_KEY);
-    else d.fillRoundRect(x, y, sz, sz, sz / 8, albumTint(playAlbum));
-    px = x; py = y; ps = sz;
+    d.fillRoundRect(x, y, w, h, h / 2, mix565(C_GREEN, c1, f, 4));
+    px = x; py = y; pw = w; ph = h;
     audioPump();
   }
 }

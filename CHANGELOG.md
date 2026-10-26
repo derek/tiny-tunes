@@ -12,8 +12,12 @@ e.g. `0.3.0+6.cb61af8`.
   corner. With nothing loaded, they sit in the middle of the screen.
 - The Podcasts shelf is called "Pods", so the name fits its card.
 - The now-playing button in the top bar isn't on Home any more (the Keep listening card
-  does that job). Leaving Home for a shelf, the card's cover shrinks up into the top
-  bar's corner and becomes the button.
+  does that job). Leaving Home for a shelf, the card's round green button moves up into
+  the top bar's corner and becomes it.
+- Keep listening's round button has the same dancing bars as the now-playing button
+  while something plays (a play triangle when paused).
+- The top bar on a shelf's albums is in the shelf's own color, as on Home (Music blue,
+  Pods purple, Books orange).
 - Keep listening's title scrolls like a marquee when it's too long to fit.
 - The Home button does nothing on Home (it used to repaint the screen).
 
