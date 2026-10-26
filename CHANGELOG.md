@@ -6,6 +6,8 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.10.0 — 2026-10-26
+
 ### Added
 - Home has a "Keep listening" card at the top when something's loaded: its cover and
   title, and a play button. One tap carries on playing and opens the player. The shelves
