@@ -2041,7 +2041,7 @@ static void playTrack(int i) {
       if (al.newCount > 0) { al.newCount--; shelves[al.shelf].newCount--; }
     }
   }
-  if (recovering) { file->seek(forceStartPos, SEEK_SET); forceStartPos = 0; }
+  if (recovering) { file->seek(std::max(forceStartPos, trackAudioStart), SEEK_SET); forceStartPos = 0; }  // never inside the tag
   mp3->begin(file, &out);  // the decoder finds the next frame on its own after a seek
   dirtyNow = true;
   if (recovering) return;  // same song, carrying on
@@ -2412,12 +2412,13 @@ static void prepareCarouselArt();  // see "albums"
 // The middle touch button below the screen is Home; the other two only count held
 // together (3 s, the grown-ups screen). Every screen has the same top bar: back (song
 // list, player), where you are, and top right the now-playing button (green while
-// playing; it opens the player) or, on the player, the volume button.
+// playing; it opens the player).
 // Shelves:  Podcasts, Music, Books (and any other shelf) as a list of wide cards.
 // Albums:   a carousel of square covers (round and round), the name across the screen.
 // Songs:    a header with the cover, name and artist; full-width song rows below.
-// Player:   the title, the artist, quieter / play / louder (5 steps, shown under play),
-//           and a seekable progress bar. Swipe for the next / previous song.
+// Player:   the cover with the song, artist and album (books: book, author, chapter),
+//           quieter / previous / play / next / louder, and a seekable progress bar (books:
+//           the whole book). Swipe for the next / previous track too.
 // Snackbars pop up at the bottom for the battery and headphones.
 
 static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return M5.Display.color565(r, g, b); }
@@ -2442,27 +2443,27 @@ static uint16_t albumColor(int i) {
   return rgb(c[0], c[1], c[2]);
 }
 
-// An album's card color: picked from its cover once that's loaded, else from the palette.
+// An album's color: picked from its cover once that's loaded, else from the palette.
 static uint16_t albumTint(int a) {
   return a >= 0 && a < (int)albums.size() && albums[a].tint ? albums[a].tint : albumColor(a);
 }
 
-// The bar along the top of every screen: a back button, where you are, and the volume
+// The bar along the top of every screen: back, where you are, and the now-playing
 // button. See "the top bar".
 static constexpr int NAV_H = 36;
 // Album covers are squares: big in the middle of the carousel, smaller beside it, small
 // in the song list's header.
 static constexpr int CV_BIG = 116, CV_SIDE = 76, CV_HEAD = 60;
-// Player: (books and podcasts: the minutes left), the title, the artist, quieter / play /
-// louder with the volume level under play, a progress bar along the bottom (drag to seek).
-// Swipe for the next / previous song.
-static constexpr int P_COL_X = 12, P_COL_CX = 160, P_COL_W = 296;
-static constexpr int P_SUB_Y = 52, P_TITLE_CY = 82, P_TITLE_H = 44, P_ARTIST_Y = 113, P_CTRL_Y = 160;
-static constexpr RoundButton B_PLAY{160, 36};
-static constexpr int VB_X = 244, VB_Y = 5, VB_W = 68, VB_H = 26;  // the top bar's now-playing button
-static constexpr RoundButton B_QUIET{78, 24}, B_LOUD{242, 24};  // volume down / up, either side of play
-static constexpr int VOL_DOTS_Y = 206;                           // the level, 5 dashes under play
+// Player: the cover (when there is one) with what's playing beside it: song, artist,
+// album / episode, show / book, author, chapter. Then quieter, previous, play, next and
+// louder in one row, the volume level and (books, podcasts) where you are and how long is
+// left, and a progress bar to drag: the song, or for books the whole book (a tick between
+// chapters). Swipe for the next / previous track too.
+static constexpr int P_COVER_X = 14, P_COVER_Y = NAV_H + 10, P_COVER = CV_HEAD, P_CTRL_Y = 158;
+static constexpr RoundButton B_PLAY{160, 34}, B_PREV{92, 24}, B_NEXT{228, 24}, B_QUIET{30, 20}, B_LOUD{290, 20};
+static constexpr int VOL_DOTS_Y = 204, P_LABEL_Y = 205;               // the level under play, labels either side
 static constexpr int PB_X = 22, PB_Y = 220, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
+static constexpr int VB_X = 244, VB_Y = 5, VB_W = 68, VB_H = 26;  // the top bar's now-playing button
 
 static uint32_t lastTouchMs = 0;
 static bool dimmed = false;
@@ -2741,7 +2742,7 @@ static void iconSpeakerWaves(int x, int y, int waves, uint16_t c) {
 
 static void drawVolumeDots() {
   auto& d = M5.Display;
-  d.fillRect(100, VOL_DOTS_Y - 4, 120, 10, C_BG);
+  d.fillRect(110, VOL_DOTS_Y - 4, 100, 10, C_BG);
   for (int i = 0; i < 5; i++) d.fillRoundRect(118 + i * 18, VOL_DOTS_Y - 2, 14, 5, 2, i < volStep() ? C_YELLOW : rgb(74, 81, 128));
 }
 
@@ -2756,24 +2757,48 @@ static void changeVolume(int by) {
 // ----- player -----
 static bool storyMode() { return isResumable(playAlbum); }
 
-// Books and podcasts: "12 min left" in this chapter or episode, from the file size and
-// its bitrate. (Music shows nothing here.)
+static bool isBook(int a) { return albumKind(a) == ShelfKind::Books; }
+
+// Books: every chapter's size, for one bar across the whole book (looked up once per book).
+static std::vector<uint32_t> bookSizes;
+static String bookSizesFor;
+static uint64_t bookTotal = 0;
+static void loadBookSizes() {
+  if (playAlbum < 0 || bookSizesFor == albums[playAlbum].path) return;
+  bookSizesFor = albums[playAlbum].path;
+  bookSizes.clear();
+  bookTotal = 0;
+  for (auto& t : tracks) { audioPump(); bookSizes.push_back(fileSize(t)); bookTotal += bookSizes.back(); }
+}
+static uint64_t bookBefore(int chapter) {  // bytes in the chapters before this one
+  uint64_t n = 0;
+  for (int k = 0; k < chapter && k < (int)bookSizes.size(); k++) n += bookSizes[k];
+  return n;
+}
+
+// Books and podcasts, either side of the volume level: "Ch 3 of 22" (books) and
+// "12 min left" in this chapter or episode (from the file size and its bitrate).
 static void drawTimeLeft(bool force) {
   static String shown;
-  String s;
-  if (storyMode() && file && file->getSize() > file->getPos()) {
-    uint32_t sec = (uint64_t)(file->getSize() - file->getPos()) * 8 / (trackKbps * 1000);
-    s = sec < 60 ? String("Almost done") : String((sec + 30) / 60) + " min left";
+  String left, right;
+  if (storyMode()) {
+    if (isBook(playAlbum)) left = "Ch " + String(current + 1) + " of " + String(tracks.size());
+    if (file && file->getSize() > file->getPos()) {
+      uint32_t sec = (uint64_t)(file->getSize() - file->getPos()) * 8 / (trackKbps * 1000);
+      right = sec < 60 ? String("Almost done") : String((sec + 30) / 60) + " min left";
+    }
   }
-  if (s == shown && !force) return;
-  shown = s;
+  if (left + "|" + right == shown && !force) return;
+  shown = left + "|" + right;
   auto& d = M5.Display;
-  d.fillRect(0, P_SUB_Y - 9, VB_X - 4, 18, C_BG);
-  d.fillRect(0, NAV_H, 320, P_SUB_Y - 9 - NAV_H, C_BG);
-  d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextDatum(middle_center);
+  d.fillRect(0, P_LABEL_Y - 8, 108, 16, C_BG);
+  d.fillRect(212, P_LABEL_Y - 8, 108, 16, C_BG);
+  d.setFont(&fonts::DejaVu12);
   d.setTextColor(C_DIM);
-  d.drawString(fitLine(s, 296), P_COL_CX, P_SUB_Y);
+  d.setTextDatum(middle_left);
+  d.drawString(left, PB_X, P_LABEL_Y);
+  d.setTextDatum(middle_right);
+  d.drawString(right, PB_X + PB_W, P_LABEL_Y);
 }
 
 static void drawPlayButton(const RoundButton& b) {
@@ -2786,30 +2811,50 @@ static void drawControls() {
   M5.Display.fillRect(0, P_CTRL_Y - B_PLAY.r - 3, 320, B_PLAY.r * 2 + 6, C_BG);
   drawRound(B_QUIET.x, P_CTRL_Y, B_QUIET.r, C_OFF);
   iconSpeakerWaves(B_QUIET.x, P_CTRL_Y, 0, C_WHITE);
+  drawRound(B_PREV.x, P_CTRL_Y, B_PREV.r, C_BLUE);
+  iconSkip(B_PREV.x, P_CTRL_Y, 22, false, C_WHITE);
   drawPlayButton(B_PLAY);
+  drawRound(B_NEXT.x, P_CTRL_Y, B_NEXT.r, C_BLUE);
+  iconSkip(B_NEXT.x, P_CTRL_Y, 22, true, C_WHITE);
   drawRound(B_LOUD.x, P_CTRL_Y, B_LOUD.r, C_OFF);
   iconSpeakerWaves(B_LOUD.x, P_CTRL_Y, 2, C_WHITE);
   drawVolumeDots();
 }
 
-// The top bar, how long is left (books and podcasts), the title, and the artist.
+// The top bar, then the cover with what's playing beside it (the full width without a
+// cover): song / artist / album, episode / show, or book / author / chapter.
 static void drawNavBar(int level);
 static void drawPlayerInfo() {
   auto& d = M5.Display;
   d.fillRect(0, 0, 320, P_CTRL_Y - B_PLAY.r - 3, C_BG);
   drawNavBar(3);
-  drawTimeLeft(true);
-  drawTitle(title, P_COL_CX, P_TITLE_CY, P_COL_W - 4, P_TITLE_H, C_WHITE);
-  if (artist.length()) {
-    d.setFont(&fonts::FreeSansBold9pt7b);
-    d.setTextDatum(middle_center);
-    d.setTextColor(rgb(200, 205, 230));
-    d.drawString(fitLine(artist, P_COL_W - 8), P_COL_CX, P_ARTIST_Y);
+  bool art = hasCover(albums[playAlbum]) && getCover(playAlbum, P_COVER);
+  if (art) drawAlbumArt(playAlbum, P_COVER_X, P_COVER_Y, P_COVER);
+  int tx = art ? P_COVER_X + P_COVER + 12 : P_COVER_X, tw = 312 - tx;
+  bool book = isBook(playAlbum), podcast = isPodcastAlbum(playAlbum);
+  String big = book ? albums[playAlbum].name : title;
+  String second = artist;
+  String third = book ? title : podcast ? String() : albums[playAlbum].name;
+  if (third == big || third == second) third = "";
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  auto lines = wrapText(big, tw, 2);
+  int y = P_COVER_Y + 10;
+  d.setTextDatum(middle_left);
+  d.setTextColor(C_WHITE);
+  for (auto& l : lines) { d.drawString(l, tx, y); y += 23; }
+  d.setFont(&fonts::FreeSansBold9pt7b);
+  if (second.length()) { d.setTextColor(C_DIM); d.drawString(fitLine(second, tw), tx, y - 2); y += 19; }
+  if (third.length()) {
+    d.setTextColor(book ? rgb(226, 210, 250) : rgb(200, 205, 230));
+    d.drawString(fitLine(third, tw), tx, y - 2);
   }
+  drawTimeLeft(true);
 }
 
 // How far into the song (or chapter, or episode), with a knob to drag.
 static bool seekDragging = false;  // a finger is on the progress bar
+
+static bool bookBar() { return isBook(playAlbum) && tracks.size() > 1; }
 
 static void drawPlayProgressAt(int p) {  // p: the knob's offset into the bar, 0..PB_W
   auto& d = M5.Display;
@@ -2817,18 +2862,39 @@ static void drawPlayProgressAt(int p) {  // p: the knob's offset into the bar, 0
   d.fillRect(0, PB_Y - 9, 320, PB_H + 20, C_BG);
   d.fillRoundRect(PB_X, PB_Y, PB_W, PB_H, PB_H / 2, C_OFF);
   if (p > 0) d.fillRoundRect(PB_X, PB_Y, std::max(p, PB_H), PB_H, PB_H / 2, albumTint(playAlbum));
+  if (bookBar() && bookTotal) {  // a tick between chapters
+    uint64_t at = 0;
+    for (size_t k = 0; k + 1 < bookSizes.size(); k++) {
+      at += bookSizes[k];
+      d.fillRect(PB_X + (int)(PB_W * at / bookTotal), PB_Y + 3, 2, PB_H - 6, rgb(150, 156, 190));
+    }
+  }
   d.fillCircle(PB_X + p, PB_Y + PB_H / 2, seekDragging ? 12 : 10, C_WHITE);
 }
 
 static void drawPlayProgress() {
   if (seekDragging) return;  // the finger's preview wins
   uint32_t start = trackAudioStart, size = file ? file->getSize() : 0, pos = file ? file->getPos() : 0;
+  if (bookBar()) {  // books: how far into the whole book
+    loadBookSizes();
+    drawPlayProgressAt(bookTotal ? (int)(PB_W * (bookBefore(current) + pos) / bookTotal) : 0);
+    return;
+  }
   drawPlayProgressAt(size > start ? (int64_t)PB_W * (pos - std::min(pos, start)) / (size - start) : 0);
 }
 
-// Jumps to `frac` (0..1) of the current song's audio, and plays.
+// Jumps to `frac` (0..1) of the current song's audio, and plays. Books: of the whole book.
 static void seekTo(float frac) {
   if (current < 0 || tracks.empty()) return;
+  if (bookBar() && bookTotal) {
+    uint64_t at = (uint64_t)(constrain(frac, 0.0f, 0.995f) * bookTotal);
+    int k = 0;
+    while (k + 1 < (int)bookSizes.size() && at >= bookSizes[k]) { at -= bookSizes[k]; k++; }
+    forceStartPos = std::max<uint32_t>(1, (uint32_t)at);  // the decoder finds the next frame (past any tag)
+    recoverTries = 0;
+    playTrack(k);
+    return;
+  }
   uint32_t size = file ? file->getSize() : fileSize(tracks[current]);
   uint32_t start = file ? trackAudioStart : 0;
   if (size <= start) return;
@@ -3086,7 +3152,10 @@ static bool handleNavBar(const m5::touch_detail_t& t) {
   }
   if (t.x < NB_TAP_W && navHasBack()) {
     buzz();
-    if (screen == Screen::Player && playAlbum >= 0) openTracks(playAlbum);
+    if (screen == Screen::Player && playAlbum >= 0) {
+      if (isBook(playAlbum)) openShelf(albums[playAlbum].shelf, playAlbum);  // books have no chapter list
+      else openTracks(playAlbum);
+    }
     else if (screen == Screen::Tracks && viewAlbum >= 0) openShelf(albums[viewAlbum].shelf, viewAlbum);
     else if (screen == Screen::Albums) showScreen(Screen::Shelves);
   }
@@ -3678,6 +3747,7 @@ static void onLibraryChanged() {
   viewTracks.clear();
   viewResume.clear();
   viewSizes.clear();
+  bookSizesFor = "";  // chapter sizes may have changed
   viewAlbum = -1;
   auto stale = [](Screen s) { return s == Screen::Albums || s == Screen::Tracks || s == Screen::Shelves; };
   if (stale(screen)) screen = Screen::Player;
@@ -3762,8 +3832,21 @@ static void handlePlayer(const m5::touch_detail_t& t) {
   if (flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }  // swipe left = next song, right = previous
   if (!t.wasClicked()) return;
   if (hit(B_PLAY, P_CTRL_Y, t.x, t.y)) { buzz(); togglePause(); }
+  else if (hit(B_PREV, P_CTRL_Y, t.x, t.y)) { buzz(); playTrack(current - 1); }
+  else if (hit(B_NEXT, P_CTRL_Y, t.x, t.y)) { buzz(); playTrack(current + 1); }
   else if (hit(B_QUIET, P_CTRL_Y, t.x, t.y)) { buzz(); changeVolume(-1); }
   else if (hit(B_LOUD, P_CTRL_Y, t.x, t.y)) { buzz(); changeVolume(1); }
+}
+
+// Where a book picks up: the first chapter not finished yet (from the start once all are).
+static int bookResumeChapter(int a) {
+  auto list = listTracks(a);
+  auto v = loadResume(albums[a].path);
+  for (size_t i = 0; i < list.size(); i++) {
+    ResumeEntry* e = findResume(v, fileName(list[i]));
+    if (!e || !e->done) return i;
+  }
+  return 0;
 }
 
 static void handleAlbums(const m5::touch_detail_t& t) {
@@ -3785,8 +3868,15 @@ static void handleAlbums(const m5::touch_detail_t& t) {
   carouselSides(left, right);
   if (t.x >= CV_X - 6 && t.x < CV_X + CV_BIG + 6) {  // the middle (cover or name): open it
     buzz();
+    int a = shelfAlbums[carouselIdx];
+    if (isBook(a)) {  // books: straight to the player, where it left off
+      if (a != playAlbum || current < 0) playAlbumTrack(a, bookResumeChapter(a));
+      else if (paused) togglePause();
+      showScreen(Screen::Player);
+      return;
+    }
     shrinkFromCarousel = true;
-    openTracks(shelfAlbums[carouselIdx]);
+    openTracks(a);
   } else if (t.y < CV_Y + CV_BIG + 12) {
     if (t.x < CV_X && left >= 0) turn(-1);
     else if (t.x >= CV_X + CV_BIG && right >= 0) turn(1);

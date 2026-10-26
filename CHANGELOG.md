@@ -6,6 +6,16 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.1 — 2026-10-25
+
+### Changed
+- Books open straight into the player, where they left off (no chapter list): one
+  progress bar for the whole book with a tick between chapters (drag across chapters),
+  "Ch 3 of 22" and the minutes left in the chapter. Back goes to the books.
+- The player shows the cover again (when there is one), with the song, artist and
+  album beside it (books: book, author, chapter; podcasts: episode and show).
+- Previous / next buttons are back on the player, between the quieter / louder ones.
+
 ## 0.9.0 — 2026-10-25
 
 ### Changed
