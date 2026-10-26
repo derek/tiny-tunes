@@ -40,7 +40,8 @@ everything on it chosen by a grown-up.
 ## For grown-ups
 
 Hold two of the touch buttons below the screen for 3 seconds for the grown-ups screen:
-the loudest the volume goes, brightness, auto-off, Bluetooth pairing, switching to WiFi
+the loudest the volume goes, brightness, auto-off, the colors (Forest, Navy, Ocean,
+Sunset, Midnight), Bluetooth pairing, switching to WiFi
 mode, and stats.
 
 **Bluetooth and WiFi.** The ESP32 can't fit Bluetooth audio and WiFi at once, so Tiny Tunes

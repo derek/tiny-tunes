@@ -64,6 +64,50 @@
 // Declared up here so Arduino's auto-generated prototypes can see it.
 enum class Screen { Player, Shelves, Albums, Tracks, Grownups };
 enum class Snack : uint8_t { None, LowBattery, Charging, Full, Headphones, Speaker };  // see "snackbars"
+
+// ---------- colors ----------
+// Themes, picked on the grown-ups screen (Settings -> Colors) and kept in prefs. All
+// dark (the screen is mostly used in the evening); 0xRRGGBB.
+struct Theme {
+  const char* name;
+  uint32_t bg, bar, card, row, off, dim, music, accent, accentInk, pods, books, level, badge, panel,
+      offDash, dimInk, litCtrl, litVol, litPlay, snackBg, snackText, modeBtn, other;
+};
+static const Theme THEMES[] = {
+    {"Forest", 0x14261E, 0x0D1B15, 0x20392D, 0x244032, 0x2C4A3B, 0x8FB5A0, 0x34A39B, 0xF2C14E, 0x14261E, 0xC9606E, 0xE0A33A,
+     0xF2C14E, 0xF4EFE3, 0x1E362A, 0x3C604E, 0x96B4A5, 0x6ECDC3, 0x466E5A, 0xFADA8C, 0x123A38, 0xCDDED4, 0x345646, 0x788C46},
+    {"Navy", 0x121630, 0x0E1128, 0x1E244E, 0x282E50, 0x32385C, 0x7882AA, 0x1996DC, 0x2EC478, 0xFFFFFF, 0x8A50EC, 0xFF924C,
+     0xFFD200, 0xFFD200, 0x1C2142, 0x4A5180, 0x969CBE, 0x6EC3F5, 0x646CA0, 0x78E6AA, 0x102846, 0xC8CDE6, 0x3C426E, 0x00AAAA},
+    {"Ocean", 0x0B2A33, 0x071E25, 0x123A45, 0x15414D, 0x1A4A56, 0x7FB2BC, 0x1FB5A8, 0xFF8C69, 0xFFFFFF, 0x6C7CFF, 0xF2B84B,
+     0xF2B84B, 0xFF8C69, 0x103641, 0x2A5E6B, 0x96BCC4, 0x70D8CE, 0x2E6270, 0xFFB49C, 0x0E3E48, 0xCFE2E6, 0x245866, 0xC9A0DC},
+    {"Sunset", 0x2A1533, 0x1E0E25, 0x3D2147, 0x42264E, 0x4A2A55, 0xC59AC9, 0xFF9F43, 0xFF7A59, 0xFFFFFF, 0xFF4F8B, 0xE0B020,
+     0xFFD43B, 0xFFFFFF, 0x361C40, 0x5E3A6A, 0xC8A8CC, 0xFFC48A, 0x6A4476, 0xFFAA90, 0x4A2440, 0xE8D4EA, 0x563262, 0x5EC8C8},
+    {"Midnight", 0x000000, 0x000000, 0x161616, 0x1E1E1E, 0x262626, 0x8C8C8C, 0x00B7FF, 0x39E58C, 0x000000, 0xB44BFF, 0xFF8A00,
+     0xF5FF3B, 0xF5FF3B, 0x141414, 0x3A3A3A, 0xA0A0A0, 0x70D8FF, 0x444444, 0x8CF5BE, 0x0A2A3A, 0xD0D0D0, 0x303030, 0x00C8B4},
+};
+static constexpr int THEME_COUNT = sizeof(THEMES) / sizeof(THEMES[0]);
+static int themeIdx = 0;
+// (a macro, not a function: the first function in the sketch is where Arduino puts its
+// prototypes, which need the structs further down)
+#define c565(c) ((uint16_t)((((c) >> 8) & 0xF800) | (((c) >> 5) & 0x07E0) | (((c) >> 3) & 0x001F)))
+#define TH(field) c565(THEMES[themeIdx].field)
+#define C_BG     TH(bg)
+#define C_BAR    TH(bar)     // Home's top bar (a shelf's screens use its color)
+#define C_KL     TH(card)    // Home's Keep listening card
+#define C_ROW    TH(row)
+#define C_OFF    TH(off)
+#define C_DIM    TH(dim)
+#define C_BLUE   TH(music)   // Music, previous / next
+#define C_ACCENT TH(accent)  // play, the now-playing button
+#define C_ACCENT_INK TH(accentInk)  // the marks on it
+#define C_BERRY  TH(pods)    // Pods
+#define C_ORANGE TH(books)   // Books
+#define C_YELLOW TH(level)   // the volume steps, progress
+#define C_CREAM  TH(badge)   // new podcast episodes
+#define C_PANEL  TH(panel)
+#define C_WHITE  c565(0xFFFFFF)
+#define C_SHADE  c565(0x000000)
+#define C_GREEN  c565(0x2EC478)  // charging, all good
 struct RoundButton { int x, r; };
 struct TrackTag { const char* file; const char* title; uint16_t track, disc; };  // one song's tag (text in PSRAM, see arenaDup)
 struct CoverEntry { String path; int size; bool dim; M5Canvas* canvas; uint32_t used; };  // see "album covers"
@@ -2216,14 +2260,14 @@ static void prepareCovers() {
     if (hasCover(albums[a]) && !coverCacheCurrent(albums[a])) todo.push_back(a);
   for (size_t i = 0; i < todo.size(); i++) {
     auto& d = M5.Display;
-    d.fillRect(0, 176, 320, 46, rgb(18, 22, 48));  // under the splash title
+    d.fillRect(0, 176, 320, 46, C_BG);  // under the splash title
     d.setFont(&fonts::FreeSansBold12pt7b);
     d.setTextColor(TFT_WHITE);
     d.setTextDatum(middle_center);
     d.setFont(&fonts::FreeSansBold9pt7b);
     d.drawString("Getting album pictures ready", 160, 188);
-    d.fillRoundRect(40, 204, 240, 10, 5, rgb(40, 46, 80));
-    d.fillRoundRect(40, 204, std::max<int>(10, 240 * (i + 1) / todo.size()), 10, 5, rgb(255, 210, 0));
+    d.fillRoundRect(40, 204, 240, 10, 5, C_ROW);
+    d.fillRoundRect(40, 204, std::max<int>(10, 240 * (i + 1) / todo.size()), 10, 5, C_YELLOW);
     delete loadCoverMaster(albums[todo[i]]);
   }
 }
@@ -2244,19 +2288,7 @@ static void prepareCarouselArt();  // see "albums"
 // Snackbars pop up at the bottom for the battery and headphones.
 
 static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return M5.Display.color565(r, g, b); }
-#define C_BG    rgb(18, 22, 48)
-#define C_BAR   rgb(10, 12, 30)
-#define C_WHITE rgb(255, 255, 255)
-#define C_SHADE rgb(0, 0, 0)
-#define C_DIM   rgb(120, 130, 170)
-#define C_ROW   rgb(40, 46, 80)
-#define C_OFF   rgb(50, 56, 92)
-#define C_BLUE  rgb(25, 150, 220)
-#define C_GREEN rgb(46, 196, 120)
-#define C_BAR   rgb(14, 17, 40)  // the top bar
-#define C_ORANGE rgb(255, 146, 76)
-#define C_YELLOW rgb(255, 210, 0)
-#define C_PANEL rgb(28, 33, 66)
+// (the colors are themes: see "colors" near the top)
 
 static uint16_t albumColor(int i) {
   static const uint8_t pal[][3] = {
@@ -2470,9 +2502,9 @@ static bool rtcNow(int& h, int& m) {
 static uint16_t shelfColor(const Shelf& sh) {
   switch (sh.kind) {
     case ShelfKind::Music: return C_BLUE;
-    case ShelfKind::Podcasts: return rgb(138, 80, 236);
+    case ShelfKind::Podcasts: return C_BERRY;
     case ShelfKind::Books: return C_ORANGE;
-    default: return rgb(0, 170, 170);
+    default: return TH(other);
   }
 }
 
@@ -2538,10 +2570,11 @@ static void drawAlbumArt(int a, int x, int y, int size, bool dim = false) {
   uint16_t c = albumTint(a);
   if (dim) {  // halfway to the background
     uint8_t r = ((c >> 11) << 3), g = (((c >> 5) & 63) << 2), b = ((c & 31) << 3);
-    c = rgb((r + 18) / 2, (g + 22) / 2, (b + 48) / 2);
+    uint32_t bg = THEMES[themeIdx].bg;
+    c = rgb((r + (bg >> 16)) / 2, (g + ((bg >> 8) & 255)) / 2, (b + (bg & 255)) / 2);
   }
   d.fillRoundRect(x, y, size, size, size / 8, c);
-  drawShelfIcon(albumKind(a), x + size / 2, y + size / 2, dim ? rgb(150, 156, 190) : C_WHITE, c, size * 100 / 120);
+  drawShelfIcon(albumKind(a), x + size / 2, y + size / 2, dim ? TH(dimInk) : C_WHITE, c, size * 100 / 120);
 }
 
 // Something's loaded: the now-playing button has somewhere to go.
@@ -2568,7 +2601,7 @@ static void iconSpeakerWaves(int x, int y, int waves, uint16_t c) {
 static void drawVolumeDots() {
   auto& d = M5.Display;
   d.fillRect(110, VOL_DOTS_Y - 4, 100, 10, C_BG);
-  for (int i = 0; i < 5; i++) d.fillRoundRect(118 + i * 18, VOL_DOTS_Y - 2, 14, 5, 2, i < volStep() ? C_YELLOW : rgb(74, 81, 128));
+  for (int i = 0; i < 5; i++) d.fillRoundRect(118 + i * 18, VOL_DOTS_Y - 2, 14, 5, 2, i < volStep() ? C_YELLOW : TH(offDash));
 }
 
 static void changeVolume(int by) {
@@ -2632,13 +2665,13 @@ static void drawControl(int i, bool lit) {
   static const RoundButton* B[5] = {&B_QUIET, &B_PREV, &B_PLAY, &B_NEXT, &B_LOUD};
   const RoundButton& b = *B[i];
   if (i == 2) {
-    drawRound(b.x, P_CTRL_Y, b.r, lit ? rgb(120, 230, 170) : C_GREEN);
-    if (paused || tracks.empty()) iconPlay(b.x, P_CTRL_Y, b.r * 8 / 9, C_WHITE);
-    else iconPause(b.x, P_CTRL_Y, b.r * 8 / 10, C_WHITE);
+    drawRound(b.x, P_CTRL_Y, b.r, lit ? TH(litPlay) : C_ACCENT);
+    if (paused || tracks.empty()) iconPlay(b.x, P_CTRL_Y, b.r * 8 / 9, C_ACCENT_INK);
+    else iconPause(b.x, P_CTRL_Y, b.r * 8 / 10, C_ACCENT_INK);
     return;
   }
   bool vol = i == 0 || i == 4;
-  drawRound(b.x, P_CTRL_Y, b.r, lit ? (vol ? rgb(100, 108, 160) : rgb(110, 195, 245)) : (vol ? C_OFF : C_BLUE));
+  drawRound(b.x, P_CTRL_Y, b.r, lit ? (vol ? TH(litVol) : TH(litCtrl)) : (vol ? C_OFF : C_BLUE));
   if (vol) iconSpeakerWaves(b.x, P_CTRL_Y, i == 4 ? 2 : 0, C_WHITE);
   else iconSkip(b.x, P_CTRL_Y, 22, i == 3, C_WHITE);
 }
@@ -2688,7 +2721,7 @@ static void drawPlayProgressAt(int p) {  // p: the knob's offset into the bar, 0
     uint64_t at = 0;
     for (size_t k = 0; k + 1 < bookSizes.size(); k++) {
       at += bookSizes[k];
-      d.fillRect(PB_X + (int)(PB_W * at / bookTotal), PB_Y + 3, 2, PB_H - 6, rgb(150, 156, 190));
+      d.fillRect(PB_X + (int)(PB_W * at / bookTotal), PB_Y + 3, 2, PB_H - 6, TH(dimInk));
     }
   }
   d.fillCircle(PB_X + p, PB_Y + PB_H / 2, seekDragging ? 12 : 10, C_WHITE);
@@ -2761,8 +2794,8 @@ static void drawSnack() {
     case Snack::LowBattery: bg = rgb(58, 20, 32); edge = rgb(240, 80, 110); text = "Charge me!"; detail = String(snackPct) + "% left"; break;
     case Snack::Charging: bg = rgb(15, 52, 36); edge = C_GREEN; text = "Charging"; detail = String(snackPct) + "%"; break;
     case Snack::Full: bg = rgb(15, 52, 36); edge = C_GREEN; text = "All charged!"; break;
-    case Snack::Headphones: bg = rgb(16, 40, 70); edge = C_BLUE; text = "Headphones on"; break;
-    case Snack::Speaker: bg = rgb(16, 40, 70); edge = C_BLUE; text = "Headphones off"; if (snackPaused) detail = "paused"; break;
+    case Snack::Headphones: bg = TH(snackBg); edge = C_BLUE; text = "Headphones on"; break;
+    case Snack::Speaker: bg = TH(snackBg); edge = C_BLUE; text = "Headphones off"; if (snackPaused) detail = "paused"; break;
     default: return;
   }
   d.fillRoundRect(SN_X, SN_Y, SN_W, SN_H, 14, edge);
@@ -2778,7 +2811,7 @@ static void drawSnack() {
   if (detail.length()) {
     int tx = SN_X + 52 + d.textWidth(text) + 10;
     d.setFont(&fonts::FreeSansBold9pt7b);
-    d.setTextColor(rgb(200, 205, 230));
+    d.setTextColor(TH(snackText));
     d.drawString(detail, tx, cy + 2);
   }
 }
@@ -2885,8 +2918,8 @@ static void drawCarousel() {
     for (int t = 3; t <= 4; t++) d.drawRoundRect(CV_X - t, CV_Y - t, CV_BIG + 2 * t, CV_BIG + 2 * t, CV_BIG / 8 + t, C_WHITE);
   drawAlbumArt(a, CV_X, CV_Y, CV_BIG);
   if (a == playAlbum) {
-    d.fillCircle(CV_X + CV_BIG - 16, CV_Y + CV_BIG - 16, 12, C_GREEN);
-    iconPlaying(CV_X + CV_BIG - 16, CV_Y + CV_BIG - 16, C_WHITE);
+    d.fillCircle(CV_X + CV_BIG - 16, CV_Y + CV_BIG - 16, 12, C_ACCENT);
+    iconPlaying(CV_X + CV_BIG - 16, CV_Y + CV_BIG - 16, C_ACCENT_INK);
   }
   if (albums[a].newCount > 0) d.fillCircle(CV_X + 14, CV_Y + 14, 7, C_YELLOW);  // new podcast episodes
   // the name across the screen (one size, two lines at most)
@@ -3046,13 +3079,13 @@ static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random b
     for (auto& h : heights) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; h = 5 + seed % 13; }
   int cx = VB_X + VB_W / 2, cy = VB_Y + VB_H / 2;
   if (home) {
-    d.fillCircle(KL_BX, KL_BY, KL_BR, C_GREEN);
-    if (!on) { iconPlay(KL_BX, KL_BY, 18, C_WHITE); return; }
+    d.fillCircle(KL_BX, KL_BY, KL_BR, C_ACCENT);
+    if (!on) { iconPlay(KL_BX, KL_BY, 18, C_ACCENT_INK); return; }
     cx = KL_BX; cy = KL_BY + 1;
   } else {
-    d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, VB_H / 2, on ? C_GREEN : C_OFF);
+    d.fillRoundRect(VB_X, VB_Y, VB_W, VB_H, VB_H / 2, on ? C_ACCENT : C_OFF);
   }
-  uint16_t ink = on ? C_WHITE : rgb(150, 156, 190);
+  uint16_t ink = on ? C_ACCENT_INK : TH(dimInk);
   for (int i = 0; i < 3; i++) d.fillRoundRect(cx - 11 + i * 8, cy + 8 - heights[i], 5, heights[i], 2, ink);
 }
 
@@ -3129,7 +3162,6 @@ static void shelfTileRect(int i, int& x, int& y, int& w, int& h) {
 
 // The title scrolls like a marquee when it's too long: a pause at the start, round it
 // goes, a pause again.
-#define C_KL rgb(30, 36, 78)  // the card's fill
 static constexpr int KL_GAP = 48, KL_HOLD_MS = 1500;
 static String klTitle;
 static int klX = 0, klW = 0, klOff = 0;  // where the title goes, its room, how far it has scrolled
@@ -3185,7 +3217,7 @@ static void drawKeepListening() {
   int tx = KL_X + CV_HEAD + 16, tw = KL_BX - KL_BR - 10 - tx;
   d.setTextDatum(middle_left);
   d.setFont(&fonts::FreeSansBold9pt7b);
-  d.setTextColor(on ? C_GREEN : C_DIM);
+  d.setTextColor(on ? C_ACCENT : C_DIM);
   d.drawString(on ? "Now playing" : "Keep listening", tx, KL_Y + 21);
   String title = isBook(playAlbum) ? albums[playAlbum].name : trackTitle(tracks[current], playAlbum);
   tx -= 1; tw += 1;  // the bigger font's letters sit a pixel further in: line it up with the label
@@ -3224,7 +3256,7 @@ static void drawShelves() {
       String n = String(sh.newCount);
       d.setFont(&fonts::FreeSansBold9pt7b);
       int bw = std::max(24, (int)d.textWidth(n) + 14), bx = x + w - bw - 6, by = y + 7;
-      d.fillRoundRect(bx, by, bw, 24, 12, C_YELLOW);
+      d.fillRoundRect(bx, by, bw, 24, 12, C_CREAM);
       d.setTextColor(C_SHADE);
       d.drawString(n, bx + bw / 2, by + 13);
     }
@@ -3237,20 +3269,20 @@ static void drawShelves() {
 static void flyToNowPlaying() {
   auto& d = M5.Display;
   const int x0 = KL_BX - KL_BR, y0 = KL_BY - KL_BR, w0 = 2 * KL_BR, h0 = 2 * KL_BR;
-  uint16_t c1 = musicIsPlaying() ? C_GREEN : C_OFF;
+  uint16_t c1 = musicIsPlaying() ? C_ACCENT : C_OFF;
   auto wipe = [&](int x, int y, int w, int h) {  // background below the bar, the bar's color in it
     int top = y - 2, bottom = y + h + 2, mid = std::min(std::max(top, NAV_H), bottom);
     if (bottom > mid) d.fillRect(x - 2, mid, w + 4, bottom - mid, C_BG);
     if (mid > top) d.fillRect(x - 2, top, w + 4, mid - top, navBarColor);
   };
-  d.fillCircle(KL_BX, KL_BY, KL_BR, C_GREEN);
+  d.fillCircle(KL_BX, KL_BY, KL_BR, C_ACCENT);
   int px = x0, py = y0, pw = w0, ph = h0;
   for (int f = 1; f <= 4; f++) {
     int x = x0 + (VB_X - x0) * f / 4, y = y0 + (VB_Y - y0) * f / 4;
     int w = w0 + (VB_W - w0) * f / 4, h = h0 + (VB_H - h0) * f / 4;
     wipe(px, py, pw, ph);
     if (f == 4) break;  // the last step is the button itself
-    d.fillRoundRect(x, y, w, h, h / 2, mix565(C_GREEN, c1, f, 4));
+    d.fillRoundRect(x, y, w, h, h / 2, mix565(C_ACCENT, c1, f, 4));
     px = x; py = y; pw = w; ph = h;
     audioPump();
   }
@@ -3534,6 +3566,7 @@ static constexpr int GU_TABS_Y = 40, GU_TAB_H = 28, GU_BODY_Y = 76;
 static constexpr int SEG_X = 118, SEG_W = 194, SEG_H = 26;  // settings: 3-way choices on the right
 static constexpr int GU_ROWS = 3, STATS_PAGES = 3;
 static const int GU_ROW_Y[GU_ROWS] = {80, 112, 144};
+static constexpr int GU_THEME_Y = 176;  // Colors: < name >, a tap on either half steps through
 static constexpr int GU_MODE_Y = 206;  // full-width mode switch button
 
 static void drawSegments(int x, int y, int w, int h, const char* const* labels, int n, int sel, uint16_t on) {
@@ -3666,9 +3699,16 @@ static void drawGrownupsBody() {
     }
     d.setFont(&fonts::FreeSansBold9pt7b);
     d.setTextDatum(middle_left);
-    d.setTextColor(C_DIM);
-    d.drawString(fitLine(owner.length() ? "Owner: " + owner + " (set on the web page)" : String("Name the owner on the web page"), 300), 10, 186);
-    d.fillRoundRect(6, GU_MODE_Y, 308, 26, 13, rgb(60, 66, 110));
+    d.setTextColor(C_WHITE);
+    d.drawString("Colors", 10, GU_THEME_Y + SEG_H / 2);
+    d.fillRoundRect(SEG_X, GU_THEME_Y, SEG_W, SEG_H, SEG_H / 2, C_ROW);
+    iconArrow(SEG_X + 16, GU_THEME_Y + SEG_H / 2, 0, C_DIM);
+    iconArrow(SEG_X + SEG_W - 16, GU_THEME_Y + SEG_H / 2, 1, C_DIM);
+    for (int k = 0; k < 4; k++)  // a swatch of the theme: Pods, Music, Books, play
+      d.fillCircle(SEG_X + 40 + k * 13, GU_THEME_Y + SEG_H / 2, 5, k == 0 ? C_BERRY : k == 1 ? C_BLUE : k == 2 ? C_ORANGE : C_ACCENT);
+    d.setTextDatum(middle_center);
+    d.drawString(THEMES[themeIdx].name, SEG_X + 130, GU_THEME_Y + SEG_H / 2 + 1);
+    d.fillRoundRect(6, GU_MODE_Y, 308, 26, 13, TH(modeBtn));
     d.setTextDatum(middle_center);
     d.setTextColor(C_WHITE);
     d.drawString(CORE2_WIFI ? "Switch to Bluetooth mode  >" : "Switch to WiFi mode  >", 160, GU_MODE_Y + 14);
@@ -3712,7 +3752,7 @@ static void drawGrownupsBody() {
       d.setTextDatum(middle_left);
     }
     xSemaphoreGive(btLock);
-    d.fillRoundRect(6, GU_MODE_Y, 308, 28, 14, rgb(60, 66, 110));
+    d.fillRoundRect(6, GU_MODE_Y, 308, 28, 14, TH(modeBtn));
     d.setTextDatum(middle_center);
     d.setTextColor(C_WHITE);
     d.drawString("Forget headphones", 160, GU_MODE_Y + 15);
@@ -3729,12 +3769,14 @@ static void drawGrownups() {
   d.setTextColor(C_WHITE);
   d.setTextDatum(middle_left);
   d.drawString("Grown-ups", 10, 19);
-  d.fillRoundRect(236, 6, 76, 27, 13, C_GREEN);
+  d.fillRoundRect(236, 6, 76, 27, 13, C_ACCENT);
   d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextDatum(middle_center);
+  d.setTextColor(C_ACCENT_INK);
   d.drawString("Done", 274, 20);
+  d.setTextColor(C_WHITE);
   static const char* const tabs[] = {"Settings", CORE2_WIFI ? "WiFi" : "Bluetooth", "Stats"};
-  drawSegments(6, GU_TABS_Y, 308, GU_TAB_H, tabs, 3, guTab, rgb(138, 80, 236));
+  drawSegments(6, GU_TABS_Y, 308, GU_TAB_H, tabs, 3, guTab, C_BERRY);
   drawGrownupsBody();
 }
 
@@ -3763,6 +3805,13 @@ static void handleGrownups(const m5::touch_detail_t& t) {
       if (r == 1) { brightIdx = i; prefs.putUChar("bright", i); applyBrightness(); }
       if (r == 2) { autoOffIdx = i; prefs.putUChar("autooff", i); }
       drawGrownupsBody();
+      return;
+    }
+    if (t.y >= GU_THEME_Y - 4 && t.y < GU_THEME_Y + SEG_H + 4 && t.x >= SEG_X) {  // Colors: back or on
+      buzz();
+      themeIdx = (themeIdx + (t.x < SEG_X + SEG_W / 2 ? THEME_COUNT - 1 : 1)) % THEME_COUNT;
+      prefs.putUChar("theme", themeIdx);
+      drawGrownups();  // the whole screen in the new colors
       return;
     }
     if (t.y >= GU_MODE_Y - 4) { buzz(); switchMode(); }
@@ -4412,6 +4461,7 @@ void setup() {
   owner = prefs.getString("owner", "");
   brightIdx = constrain((int)prefs.getUChar("bright", 1), 0, 2);
   autoOffIdx = constrain((int)prefs.getUChar("autooff", 0), 0, 2);
+  themeIdx = constrain((int)prefs.getUChar("theme", 0), 0, THEME_COUNT - 1);
   nightSync = CORE2_WIFI && prefs.getUChar("nightsync", 0);
   listenSec = prefs.getUInt("listensec", 0);
   songsPlayed = prefs.getUInt("played", 0);

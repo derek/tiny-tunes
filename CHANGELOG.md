@@ -6,6 +6,12 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+### Added
+- Color themes, picked on the grown-ups screen (Settings → Colors, tap either side to
+  step through): Forest (new, the default: deep green with berry, teal and honey
+  shelves and a gold play button), Navy (the colors until now), Ocean, Sunset and
+  Midnight.
+
 ## 0.11.0 — 2026-10-26
 
 ### Fixed
