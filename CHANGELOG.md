@@ -6,6 +6,12 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.5 — 2026-10-26
+
+### Fixed
+- Opening an album could leave three thin vertical lines across its name and artist on
+  the song list (left over from the cover's shrinking animation).
+
 ## 0.9.4 — 2026-10-26
 
 ### Changed

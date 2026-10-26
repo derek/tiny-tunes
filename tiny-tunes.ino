@@ -3286,7 +3286,7 @@ static void shrinkCover(int a) {
   int px = CV_X, py = CV_Y, ps = CV_BIG;
   for (int f = 1; f <= 4; f++) {
     int s = CV_BIG + (CV_HEAD - CV_BIG) * f / 4, x = CV_X + (TH_X - CV_X) * f / 4, y = CV_Y + (TH_Y - CV_Y) * f / 4;
-    d.fillRect(px, py, ps, ps, C_BG);
+    d.fillRect(px - 2, py - 2, ps + 4, ps + 4, C_BG);  // a little past the edges: a zoomed draw can spill a pixel
     if (f == 4) break;  // the last step is the header's own cover
     if (big) big->pushRotateZoom(&d, x + s / 2.0f, y + s / 2.0f, 0, (float)s / CV_BIG, (float)s / CV_BIG, COVER_KEY);
     else d.fillRoundRect(x, y, s, s, s / 8, albumTint(a));
@@ -4212,7 +4212,10 @@ static void handleSerial() {
       for (size_t i = 0; i < shelves.size(); i++)
         if (sh.length() && lowerStr(shelves[i].name) == sh) k = i;
       openShelf(k, playAlbum);
-    } else if (what == "songs" && playAlbum >= 0) openTracks(playAlbum);
+    } else if (what == "songs" && playAlbum >= 0) {
+      shrinkFromCarousel = screen == Screen::Albums;  // from the carousel: with its animation, like a tap
+      openTracks(playAlbum);
+    }
     else if (what == "player") showScreen(Screen::Player);
     else if (what == "grownups") { guTab = 0; beforeGrownups = screen; showScreen(Screen::Grownups); }
     else { Serial.println("ERR bad screen"); return; }
