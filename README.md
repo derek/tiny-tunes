@@ -15,8 +15,8 @@ everything on it chosen by a grown-up.
   Pods (podcasts, with a yellow badge counting the new episodes), Music and Books.
   Above them, **Keep listening** has whatever was playing last (a long title scrolls):
   one tap carries on and opens the player.
-- **Albums** are a carousel of covers: swipe left and right, round and round. The ones
-  played most recently come first. Tap the middle one to open it.
+- **Albums** are a carousel of covers: swipe left and right, round and round, A to Z.
+  It opens on the album opened or played last. Tap the middle one to open it.
 - **Songs** play when tapped; the list stays put. Tap the song that's playing for the
   player.
 - **Books** skip the list and open the player where the story left off. Its bar covers the

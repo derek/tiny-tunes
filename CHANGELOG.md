@@ -18,6 +18,9 @@ e.g. `0.3.0+6.cb61af8`.
   while something plays (a play triangle when paused).
 - The top bar is in the shelf's own color, as on Home (Music blue, Pods purple, Books
   orange), on its albums, songs and player.
+- Albums are A to Z again (the carousel goes round, so order matters less), and a
+  shelf opens on the album opened or played most recently there. Opening an album's
+  songs now counts as recent, not only playing it.
 - The player shows just the title (a book's name for books), next to the cover: no
   artist or album line.
 - Keep listening's title scrolls like a marquee when it's too long to fit.

@@ -1505,8 +1505,8 @@ static void rescanLibrary(bool keepPlaying) {
 }
 
 // ---------- recently played ----------
-// Albums played lately, newest first (their folders, up to 40), kept on the card in
-// /.recent so each shelf can list them first.
+// Albums opened or played lately, newest first (their folders, up to 40), kept on the
+// card in /.recent so each shelf's carousel can open on the latest.
 static constexpr const char* RECENT_FILE = "/.recent";
 static constexpr size_t RECENT_MAX = 40;
 static std::vector<String> recentAlbums;
@@ -2829,9 +2829,12 @@ static void openShelf(int sh, int focus) {
   shelfAlbums.clear();
   for (size_t i = 0; i < albums.size(); i++)
     if (albums[i].shelf == viewShelf) shelfAlbums.push_back(i);
-  // most recently played first; the rest stay A to Z
-  std::stable_sort(shelfAlbums.begin(), shelfAlbums.end(),
-                   [](int x, int y) { return recentRank(albums[x].path) < recentRank(albums[y].path); });
+  // A to Z (it wraps round, so there's no "first"); without a focus, it opens on the
+  // album opened or played most recently
+  if (std::find(shelfAlbums.begin(), shelfAlbums.end(), focus) == shelfAlbums.end())
+    focus = shelfAlbums.empty() ? -1 : *std::min_element(shelfAlbums.begin(), shelfAlbums.end(), [](int x, int y) {
+      return recentRank(albums[x].path) < recentRank(albums[y].path);
+    });
   auto it = std::find(shelfAlbums.begin(), shelfAlbums.end(), focus);
   carouselIdx = it == shelfAlbums.end() ? 0 : it - shelfAlbums.begin();
   showScreen(Screen::Albums);
@@ -3160,7 +3163,7 @@ static void handleShelves(const m5::touch_detail_t& t) {
     if (t.x >= x - 3 && t.x < x + w + 3 && t.y >= y - 3 && t.y < y + h + 3) {
       buzz();
       flyingFromHome = homeTileShown;  // drawAlbums() flies the card's cover up to the button
-      openShelf(i, playAlbum >= 0 && albums[playAlbum].shelf == i ? playAlbum : -1);
+      openShelf(i, -1);  // on the album opened or played last
       return;
     }
   }
@@ -3187,6 +3190,7 @@ static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown i
 static std::vector<int32_t> viewSizes;        // ...and each file's size, looked up once (-1: not yet)
 
 static void openTracks(int a) {
+  noteRecent(albums[a].path);  // the shelf's carousel opens on it next time
   viewAlbum = a;
   viewTracks = (a == playAlbum) ? tracks : listTracks(a);
   if (isResumable(a)) saveResumePos(false);  // so the playing track's bar is current
