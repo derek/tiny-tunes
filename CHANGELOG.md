@@ -6,6 +6,35 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.0 — 2026-10-25
+
+### Changed
+- Album art is square. The album picker is a carousel: one big cover in the middle
+  with the album's name across the screen below it (and its artist), the albums either
+  side peeking in. Swipe for the next / previous; it goes round and round (three or more
+  albums). Tap a side cover to turn to it, the middle to open it. No page dots.
+- The song list has a header with the album's cover (it shrinks there from the
+  carousel), its name and artist, and full-width song rows below. Podcasts too.
+- Song titles from tags lose a leading track number ("01 - The Cyclone" -> "The
+  Cyclone").
+- The library index (every album's songs and tags) and the carousel's covers are made
+  at boot, so song lists open instantly and swiping never waits on the SD card. After
+  changing the card in a computer, power-cycle (changes made through the device rescan
+  by themselves).
+
+### Fixed
+- Albums without a cover show the shelf's picture on their square, not their name twice.
+
+### Changed
+- Songs are named by their ID3 tags everywhere: the song list, the web page and the
+  player (titles, artist, album artist), with album names from the album tag. Songs
+  play in disc / track number order when every song has one. UTF-16 tags are read
+  too. File and folder names are still used where a tag is missing; podcasts keep their
+  show and episode names.
+- An album without a cover image uses the picture embedded in its songs.
+- The album picker lists the albums played most recently first (then A to Z). The
+  device remembers them in `/.recent` on the card.
+
 ## 0.8.3 — 2026-10-24
 
 ### Added

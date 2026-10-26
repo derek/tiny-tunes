@@ -9,7 +9,8 @@ The middle touch button below the screen is **Home**. Every screen has the same 
 pictures only: a round back button (on the song list and the player), and top right a
 button that's green while music plays and opens the player.
 Home is the shelves (Podcasts, Music, Books)
-as a list of wide cards; then albums as tall cards, three at a time; then the songs.
+as a list of wide cards; then albums as a carousel of square covers that goes round and
+round; then the songs.
 The player keeps it simple: the album, the title, one big play button (swipe for the next
 or previous song), a progress bar, and quieter / louder buttons either side of play (5 steps).
 Books and podcasts resume where they stopped.

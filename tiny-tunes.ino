@@ -14,7 +14,7 @@
 //
 // Kid-friendly controls:
 //   The middle touch button below the screen: Home (the left and right ones do nothing alone)
-//   Home: shelves (Podcasts, Music, Books) as a list -> albums as tall cards -> songs
+//   Home: shelves (Podcasts, Music, Books) as a list -> albums as a carousel -> songs
 //   The top bar: back and the shelf's name; top right, the player (green while playing)
 //   Player: the title, the artist, quieter / play / louder (5 volume steps, shown under
 //     play), and a progress bar to drag
@@ -64,12 +64,26 @@
 enum class Screen { Player, Shelves, Albums, Tracks, Grownups };
 enum class Snack : uint8_t { None, LowBattery, Charging, Full, Headphones, Speaker };  // see "snackbars"
 struct RoundButton { int x, r; };
+// What an MP3's ID3v2 tag says (see "tags").
+struct Id3Info {
+  String title, artist, album, albumArtist;
+  int track = 0, disc = 0;          // TRCK / TPOS ("3/12" -> 3); 0 = not given
+  uint32_t picOff = 0, picLen = 0;  // the embedded picture (APIC) inside the file
+  bool picPng = false;
+  uint32_t audioStart = 0;          // where the audio begins, after the tag
+};
+struct TrackTag { const char* file; const char* title; uint16_t track, disc; };
+struct CoverEntry { String path; int size; bool dim; M5Canvas* canvas; uint32_t used; };  // see "album covers"  // one song's tag (text in PSRAM, see arenaDup)
 struct Album {
   String name, path, coverFile;  // coverFile "" = none
   int8_t artistPrefixed = -1;    // -1 = not yet known
   int shelf = 0;                 // index into shelves
   int newCount = 0;              // podcast episodes nobody has started
   uint16_t tint = 0;             // card color picked from the cover (0 = not yet known)
+  String artFile;                // no cover image: a song with a picture in its tag ("" = none)
+  String albumArtist;            // from the tags ("" = not known)
+  bool tagsRead = false;         // `tags` filled (once per rescan; see loadTags)
+  std::vector<TrackTag> tags;
 };
 // Listen's top level. Each top-level folder of albums is a shelf: /music, /podcasts and
 // /books have their own look; any other folder of albums gets a generic one.
@@ -319,6 +333,10 @@ static bool startsNoCase(const char* s, const char* prefix, int n) {
   return true;
 }
 static std::vector<String> listTracks(int a);
+static void loadTags(int a, const std::vector<String>& files);
+static bool readId3(File& f, Id3Info& out, bool wantPic);
+static void scanAlbumTag(Album& al);
+static void arenaReset();
 static bool isPodcastAlbum(int a);
 static String joinPath(const String& dir, const char* name);
 static bool isMp3(const char* name);
@@ -556,7 +574,7 @@ async function loadLib(){
   if(a.shelf!=lastShelf){lastShelf=a.shelf;const h=document.createElement('h3');h.textContent=sh.name;h.style.margin='14px 0 4px';$('lib').appendChild(h)}
   const d=document.createElement('details');d.dataset.path=a.folder;if(open.has(a.folder))d.open=true;
   if(ai==lib.playing)d.className='cur';
-  const cover=a.cover?`<img loading="lazy" src="/cover?i=${ai}&v=${a.coverSize}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'nocover'}))">`:'<span class="nocover"></span>';
+  const cover=a.cover||a.art?`<img loading="lazy" src="/cover?i=${ai}&v=${a.coverSize}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'nocover'}))">`:'<span class="nocover"></span>';
   const others=lib.albums.map((b,bi)=>bi==ai?'':`<option value="${bi}">${esc(b.name)}</option>`).join('');
   d.innerHTML=`<summary>${cover}<b>${esc(a.name)}</b><span class="dim">${a.tracks.length} songs</span></summary>
    <div class="abtn"><button onclick="cmd('album&i=${ai}')">&#9654; Play</button>
@@ -635,7 +653,7 @@ async function planCleanup(){
     for(const [i,r] of renames.entries())await post(`/mv?from=${q(join(a.folder,'~tmp'+i+'.mp3'))}&to=${q(join(a.folder,r.to))}`)}});
   // cover.jpg from an image in the folder, or art embedded in the songs
   // no picture in the folder: make cover.jpg from art embedded in the songs (JPG/PNG covers are used as is)
-  if(!a.cover&&a.tracks.length)plan.push({on:true,label:`Make a cover for <b>${esc(a.name)}</b> from the art inside its songs`,
+  if(!a.cover&&!a.art&&a.tracks.length)plan.push({on:true,label:`Make a cover for <b>${esc(a.name)}</b> from the art inside its songs`,
     run:async()=>{let blob=null;
      for(const t of a.tracks.slice(0,3)){blob=id3Art(await (await fetch(`/file?path=${q(join(a.folder,t.file))}&n=1500000`)).arrayBuffer());if(blob)break}
      if(!blob)throw new Error('no art inside the songs');
@@ -1174,7 +1192,8 @@ static void setupWeb() {
       uint32_t coverSize = cf.length() ? fileSize(joinPath(albums[a].path, cf.c_str())) : 0;
       j = a ? ",{" : "{";
       j += "\"name\":\"" + jsonEscape(albums[a].name) + "\",\"folder\":\"" + jsonEscape(albums[a].path) +
-           "\",\"cover\":\"" + jsonEscape(cf) + "\",\"coverSize\":" + String(coverSize) + ",\"shelf\":" + String(albums[a].shelf) +
+           "\",\"cover\":\"" + jsonEscape(cf) + "\",\"art\":" + (albums[a].artFile.length() && !cf.length() ? "true" : "false") +
+           ",\"coverSize\":" + String(coverSize) + ",\"shelf\":" + String(albums[a].shelf) +
            ",\"tracks\":[";
       for (size_t i = 0; i < list.size(); i++) {
         String fname = list[i].substring(list[i].lastIndexOf('/') + 1);
@@ -1361,9 +1380,37 @@ static std::vector<String> listTracks(int a) {
   }
   dir.close();
   std::sort(found.begin(), found.end(), lessCI);
-  if (isPodcastAlbum(a)) std::reverse(found.begin(), found.end());  // date-named: newest first
   albums[a].artistPrefixed = !found.empty() && dashed * 10 >= (int)found.size() * 6;
+  if (isPodcastAlbum(a)) {  // date-named: newest first (podcasts go by their names, not tags)
+    std::reverse(found.begin(), found.end());
+    return found;
+  }
+  loadTags(a, found);
+  // when every song has a track number, play them in disc / track order
+  auto& tags = albums[a].tags;
+  auto tagOf = [&](const String& path) -> const TrackTag* {
+    String f = path.substring(path.lastIndexOf('/') + 1);
+    for (auto& t : tags) if (!strcmp(t.file, f.c_str())) return &t;
+    return nullptr;
+  };
+  bool numbered = !found.empty();
+  for (auto& p : found) { const TrackTag* t = tagOf(p); numbered &= t && t->track > 0; }
+  if (numbered)
+    std::stable_sort(found.begin(), found.end(), [&](const String& x, const String& y) {
+      const TrackTag *tx = tagOf(x), *ty = tagOf(y);
+      return tx->disc != ty->disc ? tx->disc < ty->disc : tx->track < ty->track;
+    });
   return found;
+}
+
+// How many songs an album has, without reading any tags (the stats page).
+static int countTracks(int a) {
+  int n = 0;
+  File dir = SD.open(albums[a].path);
+  if (!dir || !dir.isDirectory()) return 0;
+  while (File f = dir.openNextFile()) { n += !f.isDirectory() && isMp3(f.name()); f.close(); }
+  dir.close();
+  return n;
 }
 
 // "yoto-fleetwood" -> "Yoto Fleetwood"; names with spaces are left as typed.
@@ -1421,6 +1468,7 @@ static void onLibraryChanged();
 static void rescanLibrary(bool keepPlaying) {
   if (!keepPlaying) stopPlayback();
   albums.clear();
+  arenaReset();
   shelves.clear();
   // the three known shelves first, in this order; they stay even when empty (other
   // shelves only exist when they hold albums)
@@ -1457,6 +1505,8 @@ static void rescanLibrary(bool keepPlaying) {
   }
   shelves = kept;
   for (auto& al : albums) al.shelf = remap[al.shelf];
+  for (auto& al : albums)  // names, artists and pictures from the tags (podcasts keep their show names)
+    if (al.shelf >= 0 && al.shelf < (int)shelves.size() && shelves[al.shelf].kind != ShelfKind::Podcasts) { audioPump(); scanAlbumTag(al); }
   std::sort(albums.begin(), albums.end(), [](const Album& a, const Album& b) {
     if (a.shelf != b.shelf) return a.shelf < b.shelf;
     bool la = a.name == "Songs", lb = b.name == "Songs";
@@ -1473,8 +1523,45 @@ static void rescanLibrary(bool keepPlaying) {
     current = -1;
   }
   clearCoverCache();
+  for (size_t i = 0; i < albums.size(); i++)  // the library index: every album's songs and tags, now
+    if (!isPodcastAlbum(i)) listTracks(i);
   songCountCache = -1;
   onLibraryChanged();
+}
+
+// ---------- recently played ----------
+// Albums played lately, newest first (their folders, up to 40), kept on the card in
+// /.recent so each shelf can list them first.
+static constexpr const char* RECENT_FILE = "/.recent";
+static constexpr size_t RECENT_MAX = 40;
+static std::vector<String> recentAlbums;
+
+static void loadRecent() {
+  recentAlbums.clear();
+  File f = SD.open(RECENT_FILE);
+  while (f && f.available() && recentAlbums.size() < RECENT_MAX) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length()) recentAlbums.push_back(line);
+  }
+  if (f) f.close();
+}
+
+static void noteRecent(const String& path) {
+  if (!recentAlbums.empty() && recentAlbums[0] == path) return;  // already first: nothing to write
+  recentAlbums.erase(std::remove(recentAlbums.begin(), recentAlbums.end(), path), recentAlbums.end());
+  recentAlbums.insert(recentAlbums.begin(), path);
+  if (recentAlbums.size() > RECENT_MAX) recentAlbums.resize(RECENT_MAX);
+  File f = SD.open(RECENT_FILE, FILE_WRITE);
+  if (!f) return;
+  for (auto& p : recentAlbums) f.println(p);
+  f.close();
+}
+
+static int recentRank(const String& path) {
+  for (size_t i = 0; i < recentAlbums.size(); i++)
+    if (recentAlbums[i] == path) return i;
+  return INT_MAX;
 }
 
 static int findAlbum(const String& path) {
@@ -1579,6 +1666,10 @@ static String dropShowName(String t, const String& show) {
 
 static String trackTitle(const String& path, int a) {
   String n = path.substring(path.lastIndexOf('/') + 1);
+  if (a >= 0 && a < (int)albums.size() && !isPodcastAlbum(a))
+    for (auto& t : albums[a].tags)
+      if (!strcmp(t.file, n.c_str()) && t.title[0]) return t.title;  // the song's tag says
+
   if (n.length() > 4) n.remove(n.length() - 4);
   String t = cleanTitle(n, true, a >= 0 && a < (int)albums.size() && albums[a].artistPrefixed == 1);
   return isPodcastAlbum(a) ? dropShowName(t, albums[a].name) : t;
@@ -1680,49 +1771,186 @@ static void saveResumePos(bool finished) {
 static uint32_t be32(const uint8_t* b) { return (uint32_t)b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3]; }
 static uint32_t synchsafe(const uint8_t* b) { return (b[0] & 0x7F) << 21 | (b[1] & 0x7F) << 14 | (b[2] & 0x7F) << 7 | (b[3] & 0x7F); }
 
-// One ID3 text frame's value as UTF-8 (Latin-1 or UTF-8 frames; UTF-16 gives "").
+// ---------- tags ----------
+// The library index (every album's songs and their tags) is built when the card is
+// scanned, at boot and after changes made through the device. Its text lives in PSRAM:
+// hundreds of little Strings would eat the internal RAM that Bluetooth needs.
+static std::vector<char*> arenaBlocks;
+static size_t arenaUsed = 0;
+static constexpr size_t ARENA_BLOCK = 16384;
+
+static const char* arenaDup(const String& s) {
+  size_t n = std::min<size_t>(s.length(), 255) + 1;
+  if (arenaBlocks.empty() || arenaUsed + n > ARENA_BLOCK) {
+    char* b = (char*)heap_caps_malloc(ARENA_BLOCK, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!b) return "";
+    arenaBlocks.push_back(b);
+    arenaUsed = 0;
+  }
+  char* p = arenaBlocks.back() + arenaUsed;
+  memcpy(p, s.c_str(), n - 1);
+  p[n - 1] = 0;
+  arenaUsed += n;
+  return p;
+}
+
+static void arenaReset() {
+  for (char* b : arenaBlocks) heap_caps_free(b);
+  arenaBlocks.clear();
+  arenaUsed = 0;
+}
+
+// A title from a tag, tidied: "01 - The Cyclone" / "3. Dreams" -> "The Cyclone" / "Dreams"
+// (a number only counts as a track number when " - " or ". " follows it, so
+// "99 Luftballons" keeps its 99).
+static String tagTitleClean(const String& tag) {
+  String t = cleanTitle(asciiFold(tag), false, false);
+  int i = 0;
+  while (i < (int)t.length() && i < 3 && isdigit(t[i])) i++;
+  if (i > 0 && i + 2 < (int)t.length() && ((t[i] == ' ' && t[i + 1] == '-') || t[i] == '.')) {
+    int j = i + 1;
+    while (j < (int)t.length() && strchr(" -.", t[j])) j++;
+    if (j > i + 1 && j < (int)t.length()) t = t.substring(j);
+  }
+  return t == "Song" ? String() : t;
+}
+// Songs are named by their ID3v2 tags where they have them (title, artist, album, album
+// artist, track and disc numbers, and a picture for albums without a cover image), and
+// by their file and folder names otherwise. An album's tags are read once per rescan.
+
+// One ID3 text frame's value as UTF-8: Latin-1, UTF-16 (with or without a byte-order
+// mark) or UTF-8. Characters outside the BMP are dropped (the screen font is ASCII anyway).
 static String id3Text(const uint8_t* v, uint32_t size) {
   String out;
-  if (v[0] == 0) {  // Latin-1 -> UTF-8
-    for (uint32_t i = 1; i < size && v[i]; i++) {
+  uint8_t enc = v[0];
+  uint32_t i = 1;
+  if (enc == 1 || enc == 2) {
+    bool be = enc == 2;
+    if (enc == 1 && i + 1 < size) {
+      if (v[i] == 0xFE && v[i + 1] == 0xFF) { be = true; i += 2; }
+      else if (v[i] == 0xFF && v[i + 1] == 0xFE) i += 2;
+    }
+    for (; i + 1 < size; i += 2) {
+      uint16_t c = be ? (v[i] << 8 | v[i + 1]) : (v[i + 1] << 8 | v[i]);
+      if (!c) break;
+      if (c >= 0xD800 && c < 0xE000) continue;
+      if (c < 0x80) out += (char)c;
+      else if (c < 0x800) { out += (char)(0xC0 | c >> 6); out += (char)(0x80 | (c & 0x3F)); }
+      else { out += (char)(0xE0 | c >> 12); out += (char)(0x80 | ((c >> 6) & 0x3F)); out += (char)(0x80 | (c & 0x3F)); }
+    }
+  } else if (enc == 0) {  // Latin-1 -> UTF-8
+    for (; i < size && v[i]; i++) {
       if (v[i] < 0x80) out += (char)v[i];
       else { out += (char)(0xC0 | v[i] >> 6); out += (char)(0x80 | (v[i] & 0x3F)); }
     }
-  } else if (v[0] == 3) {  // UTF-8
-    for (uint32_t i = 1; i < size && v[i]; i++) out += (char)v[i];
+  } else if (enc == 3) {  // UTF-8
+    for (; i < size && v[i]; i++) out += (char)v[i];
   }
+  out.trim();
   return out;
 }
 
-// Reads the ID3v2 title and artist and leaves `f` at the start of the audio.
-// ESP8266Audio's AudioFileSourceID3 reads the entire tag a byte at a time, which took
-// seconds on songs with embedded cover art; this seeks past every other frame.
-static String readId3Title(AudioFileSourceSD* f, String& artist) {
-  artist = "";
+// Reads an ID3v2.3 / v2.4 tag. Seeks past every frame it doesn't need (ESP8266Audio's
+// AudioFileSourceID3 reads the whole tag a byte at a time, which took seconds on songs
+// with cover art inside). wantPic: also note where the embedded picture is. Returns
+// false when there's no tag (out.audioStart is then 0).
+static bool readId3(File& f, Id3Info& out, bool wantPic) {
+  out = Id3Info();
   uint8_t h[10];
-  if (f->read(h, 10) != 10 || memcmp(h, "ID3", 3) || h[3] < 3 || h[3] > 4) {
-    f->seek(0, SEEK_SET);
-    return "";
-  }
+  f.seek(0);
+  if (f.read(h, 10) != 10 || memcmp(h, "ID3", 3) || h[3] < 3 || h[3] > 4) return false;
   uint32_t tagEnd = 10 + synchsafe(h + 6) + ((h[5] & 0x10) ? 10 : 0);  // + footer
-  String title;
-  if (!(h[5] & 0xC0)) {  // skip frame parsing for unsynchronised tags / extended headers (rare)
-    for (uint32_t pos = 10; pos + 10 <= tagEnd && !(title.length() && artist.length());) {
-      uint8_t fh[10];
-      if (f->read(fh, 10) != 10 || !fh[0]) break;  // end, or padding
-      uint32_t size = h[3] == 4 ? synchsafe(fh + 4) : be32(fh + 4);
-      bool isTitle = !memcmp(fh, "TIT2", 4), isArtist = !memcmp(fh, "TPE1", 4);
-      if ((isTitle || isArtist) && size > 1 && size < 256) {
-        uint8_t v[256];
-        if (f->read(v, size) != size) break;
-        (isTitle ? title : artist) = id3Text(v, size);
-      }
-      pos += 10 + size;
-      f->seek(pos, SEEK_SET);
-    }
+  out.audioStart = tagEnd;
+  if (h[5] & 0x80) return true;  // unsynchronised tag (rare): just skip it
+  uint32_t pos = 10;
+  if (h[5] & 0x40) {  // extended header
+    uint8_t e[4];
+    if (f.read(e, 4) != 4) return true;
+    pos += h[3] == 4 ? synchsafe(e) : be32(e) + 4;
   }
-  f->seek(tagEnd, SEEK_SET);
-  return title;
+  while (pos + 10 <= tagEnd) {
+    uint8_t fh[10];
+    f.seek(pos);
+    if (f.read(fh, 10) != 10 || !fh[0]) break;  // the end, or padding
+    uint32_t size = h[3] == 4 ? synchsafe(fh + 4) : be32(fh + 4);
+    if (!size || pos + 10 + size > tagEnd) break;
+    const char* id = (const char*)fh;
+    if (id[0] == 'T' && size < 512) {
+      String* text = !memcmp(id, "TIT2", 4) ? &out.title : !memcmp(id, "TPE1", 4) ? &out.artist
+                   : !memcmp(id, "TALB", 4) ? &out.album : !memcmp(id, "TPE2", 4) ? &out.albumArtist : nullptr;
+      int* num = !memcmp(id, "TRCK", 4) ? &out.track : !memcmp(id, "TPOS", 4) ? &out.disc : nullptr;
+      if (text || num) {
+        uint8_t v[512];
+        if (f.read(v, size) != size) break;
+        String t = id3Text(v, size);
+        if (text) *text = t;
+        else *num = t.toInt();  // "3/12" -> 3
+      }
+    } else if (wantPic && !out.picLen && !memcmp(id, "APIC", 4) && size > 32) {
+      uint8_t v[160];
+      uint32_t n = std::min<uint32_t>(size, sizeof v), i = 1;
+      if (f.read(v, n) != n) break;
+      uint8_t enc = v[0];
+      String mime;
+      while (i < n && v[i]) mime += (char)v[i++];
+      i += 2;  // the mime type's nul, the picture type
+      if (enc == 1 || enc == 2) { while (i + 1 < n && (v[i] || v[i + 1])) i += 2; i += 2; }  // description
+      else { while (i < n && v[i]) i++; i++; }
+      if (i < n) {
+        out.picOff = pos + 10 + i;
+        out.picLen = size - i;
+        out.picPng = lowerStr(mime).indexOf("png") >= 0 || (v[i] == 0x89 && v[i + 1] == 'P');
+      }
+    }
+    pos += 10 + size;
+  }
+  return true;
+}
+
+// Fills an album's tags (titles and track numbers) the first time it's listed.
+static void loadTags(int a, const std::vector<String>& files) {
+  Album& al = albums[a];
+  if (al.tagsRead) return;
+  al.tagsRead = true;
+  al.tags.clear();
+  for (auto& path : files) {
+    audioPump();
+    File f = SD.open(path);
+    if (!f) continue;
+    Id3Info tag;
+    readId3(f, tag, false);
+    f.close();
+    String title = tag.title.length() ? tagTitleClean(tag.title) : String();
+    al.tags.push_back({arenaDup(path.substring(path.lastIndexOf('/') + 1)), arenaDup(title), (uint16_t)tag.track, (uint16_t)tag.disc});
+  }
+}
+
+// At scan time, one song per album: the album's name and artist from its tag, and
+// whether it carries a picture (for albums without a cover image).
+static void scanAlbumTag(Album& al) {
+  File dir = SD.open(al.path);
+  if (!dir || !dir.isDirectory()) return;
+  String first;
+  while (File f = dir.openNextFile()) {
+    if (!f.isDirectory() && isMp3(f.name()) && (!first.length() || lessCI(f.name(), first))) first = f.name();
+    f.close();
+  }
+  dir.close();
+  if (!first.length()) return;
+  String path = joinPath(al.path, first.c_str());
+  File f = SD.open(path);
+  if (!f) return;
+  Id3Info tag;
+  bool any = readId3(f, tag, !al.coverFile.length());
+  f.close();
+  if (!any) return;
+  if (tag.album.length() && al.name != "Songs") {
+    String n = cleanTitle(asciiFold(tag.album), false, false);
+    if (n != "Song") al.name = n;
+  }
+  String who = tag.albumArtist.length() ? tag.albumArtist : tag.artist;
+  if (who.length()) al.albumArtist = asciiFold(who);
+  if (tag.picLen) al.artFile = path;
 }
 
 // The artist when the song's tag doesn't say: the show for podcasts, "Artist - Album"
@@ -1730,6 +1958,7 @@ static String readId3Title(AudioFileSourceSD* f, String& artist) {
 static String guessArtist(int a, const String& path) {
   if (a < 0 || a >= (int)albums.size()) return "";
   if (isPodcastAlbum(a)) return albums[a].name;
+  if (albums[a].albumArtist.length()) return albums[a].albumArtist;
   int p = albums[a].name.indexOf(" - ");
   if (p > 0) return albums[a].name.substring(0, p);
   if (albums[a].artistPrefixed == 1) {
@@ -1788,13 +2017,16 @@ static void playTrack(int i) {
     return;
   }
   missing = 0;
-  String tagArtist;
-  String tagTitle = readId3Title(file, tagArtist);
+  Id3Info tag;
+  if (File tf = SD.open(tracks[i])) { readId3(tf, tag, false); tf.close(); }
+  file->seek(tag.audioStart, SEEK_SET);
+  String tagTitle = tag.title, tagArtist = tag.artist.length() ? tag.artist : tag.albumArtist;
   artist = tagArtist.length() ? asciiFold(tagArtist) : guessArtist(playAlbum, tracks[i]);
   artist.trim();
-  trackAudioStart = file->getPos();
+  trackAudioStart = tag.audioStart;
   trackKbps = readMp3Kbps(file);
-  title = tagTitle.length() ? cleanTitle(tagTitle, false, false) : trackTitle(tracks[i], playAlbum);
+  title = tagTitle.length() ? tagTitleClean(tagTitle) : String();
+  if (!title.length()) title = trackTitle(tracks[i], playAlbum);
   if (isPodcastAlbum(playAlbum)) title = dropShowName(title, albums[playAlbum].name);
   if (isResumable(playAlbum)) {  // pick up where this track was left, a moment early
     auto& v = resumeFor(playAlbum);
@@ -1816,6 +2048,7 @@ static void playTrack(int i) {
   songsPlayed++;
   prefs.putUInt("played", songsPlayed);
   prefs.putString("album", albums[playAlbum].path);  // power-on picks up here
+  noteRecent(albums[playAlbum].path);
   prefs.putInt("track", current);
 }
 
@@ -1941,8 +2174,54 @@ static bool readCoverCache(const Album& al, uint32_t srcSize, M5Canvas* into) {
   return ok;
 }
 
+// An album's picture: its cover image file, or else the picture inside one of its songs'
+// tags. key tells the cache which one it was made from (embedded pictures set the top bit).
+static bool coverSource(const Album& al, String& path, uint32_t& off, uint32_t& len, bool& png, uint32_t& key) {
+  if (al.coverFile.length()) {
+    path = joinPath(al.path, al.coverFile.c_str());
+    off = 0;
+    len = key = fileSize(path);
+    png = lowerStr(al.coverFile).endsWith(".png");
+    return len > 0;
+  }
+  if (!al.artFile.length()) return false;
+  File f = SD.open(al.artFile);
+  if (!f) return false;
+  Id3Info tag;
+  readId3(f, tag, true);
+  f.close();
+  if (!tag.picLen || tag.picLen > 4000000) return false;
+  path = al.artFile;
+  off = tag.picOff;
+  len = tag.picLen;
+  png = tag.picPng;
+  key = tag.picLen | 0x80000000u;
+  return true;
+}
+
+static bool hasCover(const Album& al) { return al.coverFile.length() || al.artFile.length(); }
+
 static bool coverCacheCurrent(const Album& al) {
-  return al.coverFile.length() && readCoverCache(al, fileSize(joinPath(al.path, al.coverFile.c_str())), nullptr);
+  String path;
+  uint32_t off, len, key;
+  bool png;
+  return coverSource(al, path, off, len, png, key) && readCoverCache(al, key, nullptr);
+}
+
+// A JPEG's size from its bytes (false for progressive JPEGs, which the decoder can't do).
+static bool jpegSizeMem(const uint8_t* b, uint32_t n, int& w, int& h) {
+  if (n < 4 || b[0] != 0xFF || b[1] != 0xD8) return false;
+  for (uint32_t i = 2; i + 9 < n && b[i] == 0xFF;) {
+    uint8_t marker = b[i + 1];
+    uint32_t len = (b[i + 2] << 8) | b[i + 3];
+    if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2) {
+      h = (b[i + 5] << 8) | b[i + 6];
+      w = (b[i + 7] << 8) | b[i + 8];
+      return marker != 0xC2 && w > 0 && h > 0;
+    }
+    i += 2 + len;
+  }
+  return false;
 }
 
 // A card color from the cover: its colors averaged, weighted toward the more colorful
@@ -1963,29 +2242,53 @@ static uint16_t coverTint(M5Canvas* c) {
 }
 
 static M5Canvas* loadCoverMaster(Album& al) {
-  if (!al.coverFile.length()) return nullptr;
-  String src = joinPath(al.path, al.coverFile.c_str());
-  uint32_t srcSize = fileSize(src);
+  String src;
+  uint32_t off, len, key;
+  bool png;
+  if (!coverSource(al, src, off, len, png, key)) return nullptr;
   M5Canvas* c = newCanvas(COVER_MASTER);
   if (!c) return nullptr;
-  if (readCoverCache(al, srcSize, c)) { al.tint = coverTint(c); return c; }
+  if (readCoverCache(al, key, c)) { al.tint = coverTint(c); return c; }
 
-  String lower = lowerStr(al.coverFile);
-  bool png = lower.endsWith(".png");
   int w = 0, h = 0;
-  bool ok = png ? pngSize(src, w, h) : jpegSize(src, w, h);
-  if (ok) {
-    c->fillSprite(TFT_BLACK);
-    float sc = (float)COVER_MASTER / std::min(w, h);  // fill the square, center-crop the rest
-    int offX = (w * sc - COVER_MASTER) / 2, offY = (h * sc - COVER_MASTER) / 2;
-    ok = png ? c->drawPngFile(SD, src.c_str(), 0, 0, COVER_MASTER, COVER_MASTER, offX, offY, sc, sc)
-             : c->drawJpgFile(SD, src.c_str(), 0, 0, COVER_MASTER, COVER_MASTER, offX, offY, sc, sc);
+  bool ok = false;
+  c->fillSprite(TFT_BLACK);
+  auto scale = [&](float& sc, int& offX, int& offY) {  // fill the square, center-crop the rest
+    sc = (float)COVER_MASTER / std::min(w, h);
+    offX = (w * sc - COVER_MASTER) / 2;
+    offY = (h * sc - COVER_MASTER) / 2;
+  };
+  float sc;
+  int offX, offY;
+  if (!off) {  // an image file
+    ok = png ? pngSize(src, w, h) : jpegSize(src, w, h);
+    if (ok) {
+      scale(sc, offX, offY);
+      ok = png ? c->drawPngFile(SD, src.c_str(), 0, 0, COVER_MASTER, COVER_MASTER, offX, offY, sc, sc)
+               : c->drawJpgFile(SD, src.c_str(), 0, 0, COVER_MASTER, COVER_MASTER, offX, offY, sc, sc);
+    }
+  } else {  // the picture inside a song: read it into PSRAM and decode from there
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    File f = buf ? SD.open(src) : File();
+    ok = f && f.seek(off) && f.read(buf, len) == len;
+    if (f) f.close();
+    if (ok) {
+      png = len > 24 && !memcmp(buf, "\x89PNG", 4);
+      if (png) { w = be32(buf + 16); h = be32(buf + 20); ok = w > 0 && h > 0; }
+      else ok = jpegSizeMem(buf, len, w, h);
+    }
+    if (ok) {
+      scale(sc, offX, offY);
+      ok = png ? c->drawPng(buf, len, 0, 0, COVER_MASTER, COVER_MASTER, offX, offY, sc, sc)
+               : c->drawJpg(buf, len, 0, 0, COVER_MASTER, COVER_MASTER, offX, offY, sc, sc);
+    }
+    if (buf) heap_caps_free(buf);
   }
   if (!ok) { delete c; return nullptr; }
   al.tint = coverTint(c);
   File out = SD.open(joinPath(al.path, COVER_CACHE), FILE_WRITE);
   if (out) {
-    CoverCacheHeader hdr{{'C', '2', 'C', '1'}, srcSize};
+    CoverCacheHeader hdr{{'C', '2', 'C', '1'}, key};
     out.write((const uint8_t*)&hdr, sizeof hdr);
     out.write((const uint8_t*)c->getBuffer(), COVER_BYTES);
     out.close();
@@ -2010,35 +2313,77 @@ static void roundCorners(M5Canvas* c, int r) {
     }
 }
 
-struct CoverEntry { String path; int size; M5Canvas* canvas; uint32_t used; };
+// Scaled covers (the sizes the screens use) are kept in PSRAM, not the 160 px originals
+// they're made from. The carousel's are made for every album at boot, while there's
+// room; past that the least recently used make way.
 static std::vector<CoverEntry> coverCache;
+static constexpr size_t COVER_PSRAM_RESERVE = 700000;  // leave this much PSRAM for everything else
 
 static void clearCoverCache() {
   for (auto& e : coverCache) delete e.canvas;
   coverCache.clear();
 }
 
-static M5Canvas* getCover(int a, int size) {
-  if (a < 0 || a >= (int)albums.size() || !albums[a].coverFile.length()) return nullptr;
-  const String& path = albums[a].path;
+// Halfway to the background color (the carousel's side covers), keeping the corner key.
+static void dimCanvas(M5Canvas* c) {
+  uint16_t* px = (uint16_t*)c->getBuffer();
+  uint16_t key = __builtin_bswap16(COVER_KEY);
+  for (int i = 0, n = c->width() * c->height(); i < n; i++) {
+    if (px[i] == key) continue;
+    uint16_t v = __builtin_bswap16(px[i]);
+    int r = ((v >> 11) + (18 >> 3)) / 2, g = (((v >> 5) & 63) + (22 >> 2)) / 2, b = ((v & 31) + (48 >> 3)) / 2;
+    px[i] = __builtin_bswap16((uint16_t)(r << 11 | g << 5 | b));
+  }
+}
+
+static M5Canvas* scaleCover(M5Canvas* master, int size, bool dim) {
+  M5Canvas* c = newCanvas(size);
+  if (!c) return nullptr;
+  master->pushRotateZoomWithAA(c, size / 2.0f - 0.5f, size / 2.0f - 0.5f, 0, (float)size / COVER_MASTER, (float)size / COVER_MASTER);
+  if (dim) dimCanvas(c);
+  roundCorners(c, size / 8);
+  return c;
+}
+
+static CoverEntry* findCover(const String& path, int size, bool dim) {
   for (auto& e : coverCache)
-    if (e.size == size && e.path == path) { e.used = millis(); return e.canvas; }
-  M5Canvas* master = size == COVER_MASTER ? nullptr : getCover(a, COVER_MASTER);
-  if (coverCache.size() >= 24) {  // evict least recently used
-    auto lru = std::min_element(coverCache.begin(), coverCache.end(),
-                                [](const CoverEntry& x, const CoverEntry& y) { return x.used < y.used; });
-    if (lru->canvas == master) master = nullptr;  // don't free what we're about to scale from
-    else { delete lru->canvas; coverCache.erase(lru); }
+    if (e.size == size && e.dim == dim && e.path == path) return &e;
+  return nullptr;
+}
+
+// Frees the least recently used covers until there's room again.
+static void makeCoverRoom() {
+  while (!coverCache.empty() && (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) < COVER_PSRAM_RESERVE + 60000 || coverCache.size() >= 400)) {
+    auto lru = std::min_element(coverCache.begin(), coverCache.end(), [](const CoverEntry& x, const CoverEntry& y) { return x.used < y.used; });
+    delete lru->canvas;
+    coverCache.erase(lru);
   }
-  M5Canvas* c = nullptr;
-  if (size == COVER_MASTER) c = loadCoverMaster(albums[a]);
-  else if (master && (c = newCanvas(size))) {
-    master->pushRotateZoomWithAA(c, size / 2.0f - 0.5f, size / 2.0f - 0.5f, 0, (float)size / COVER_MASTER, (float)size / COVER_MASTER);
-    roundCorners(c, size / 8);
-  }
-  coverCache.push_back({path, size, c, millis()});  // a failed decode is cached as null too
+}
+
+static M5Canvas* getCover(int a, int size, bool dim = false) {
+  if (a < 0 || a >= (int)albums.size() || !hasCover(albums[a])) return nullptr;
+  const String& path = albums[a].path;
+  if (CoverEntry* e = findCover(path, size, dim)) { e->used = millis(); return e->canvas; }
+  makeCoverRoom();
+  M5Canvas* master = loadCoverMaster(albums[a]);
+  M5Canvas* c = master ? scaleCover(master, size, dim) : nullptr;
+  delete master;
+  coverCache.push_back({path, size, dim, c, millis()});  // a failed decode is cached as null too
   audioPump();  // loading and scaling a cover is the slowest part of drawing a screen
   return c;
+}
+
+// Makes an album's covers in all the sizes the screens use (one load of the original).
+static void prepareAlbumArt(int a, const int* sizes, const bool* dims, int n) {
+  if (a < 0 || a >= (int)albums.size() || !hasCover(albums[a])) return;
+  M5Canvas* master = nullptr;
+  for (int k = 0; k < n; k++) {
+    if (findCover(albums[a].path, sizes[k], dims[k])) continue;
+    if (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) < COVER_PSRAM_RESERVE + 60000) break;  // full: the rest on demand
+    if (!master && !(master = loadCoverMaster(albums[a]))) return;
+    coverCache.push_back({albums[a].path, sizes[k], dims[k], scaleCover(master, sizes[k], dims[k]), millis()});
+  }
+  delete master;
 }
 
 // Decodes any covers that aren't cached yet, before playback starts, so the
@@ -2046,7 +2391,7 @@ static M5Canvas* getCover(int a, int size) {
 static void prepareCovers() {
   std::vector<int> todo;
   for (size_t a = 0; a < albums.size(); a++)
-    if (albums[a].coverFile.length() && !coverCacheCurrent(albums[a])) todo.push_back(a);
+    if (hasCover(albums[a]) && !coverCacheCurrent(albums[a])) todo.push_back(a);
   for (size_t i = 0; i < todo.size(); i++) {
     auto& d = M5.Display;
     d.fillRect(0, 176, 320, 46, rgb(18, 22, 48));  // under the splash title
@@ -2061,14 +2406,16 @@ static void prepareCovers() {
   }
 }
 
+static void prepareCarouselArt();  // see "albums"
+
 // ================= kid-friendly UI =================
 // The middle touch button below the screen is Home; the other two only count held
 // together (3 s, the grown-ups screen). Every screen has the same top bar: back (song
 // list, player), where you are, and top right the now-playing button (green while
 // playing; it opens the player) or, on the player, the volume button.
 // Shelves:  Podcasts, Music, Books (and any other shelf) as a list of wide cards.
-// Albums:   tall cards, 3 at a time, paging sideways.
-// Songs:    the album's tall card on the left (it slides over), the songs beside it.
+// Albums:   a carousel of square covers (round and round), the name across the screen.
+// Songs:    a header with the cover, name and artist; full-width song rows below.
 // Player:   the title, the artist, quieter / play / louder (5 steps, shown under play),
 //           and a seekable progress bar. Swipe for the next / previous song.
 // Snackbars pop up at the bottom for the battery and headphones.
@@ -2103,8 +2450,9 @@ static uint16_t albumTint(int a) {
 // The bar along the top of every screen: a back button, where you are, and the volume
 // button. See "the top bar".
 static constexpr int NAV_H = 36;
-// The tall album card, the same size and height on the album picker and the song list.
-static constexpr int CARD_X = 12, CARD_Y = NAV_H + 7, CARD_W = 90, CARD_H = 172;
+// Album covers are squares: big in the middle of the carousel, smaller beside it, small
+// in the song list's header.
+static constexpr int CV_BIG = 116, CV_SIDE = 76, CV_HEAD = 60;
 // Player: (books and podcasts: the minutes left), the title, the artist, quieter / play /
 // louder with the volume level under play, a progress bar along the bottom (drag to seek).
 // Swipe for the next / previous song.
@@ -2119,7 +2467,6 @@ static constexpr int PB_X = 22, PB_Y = 220, PB_W = 276, PB_H = 14;  // progress:
 static uint32_t lastTouchMs = 0;
 static bool dimmed = false;
 static bool screenOff = false;  // the power button's tap: screen off, sound on (see handleInput)
-static int albumsPage = 0;
 static int viewAlbum = -1, tracksTop = 0;
 static std::vector<String> viewTracks;
 
@@ -2337,8 +2684,8 @@ static void drawShelfIcon(ShelfKind kind, int cx, int cy, uint16_t c, uint16_t b
   }
 }
 
-// ----- the tall card (albums and shelves) -----
-// A flat, white-edged card.
+// ----- cards and album art -----
+// A flat, white-edged card (Home's shelves).
 static void drawCardFrame(int x, int y, int w, int h, uint16_t fill) {
   auto& d = M5.Display;
   d.fillRoundRect(x, y, w, h, 13, C_WHITE);
@@ -2346,7 +2693,7 @@ static void drawCardFrame(int x, int y, int w, int h, uint16_t fill) {
 }
 
 // Centered text in one font size (bold 9 pt), wrapped over up to
-// maxLines lines ("..." past that). Album names use it so they all look the same.
+// maxLines lines ("..." past that).
 static void drawWrapped(const String& text, int cx, int cy, int w, int maxLines, uint16_t fg) {
   auto& d = M5.Display;
   d.setFont(&fonts::FreeSansBold9pt7b);
@@ -2357,25 +2704,18 @@ static void drawWrapped(const String& text, int cx, int cy, int w, int maxLines,
   for (size_t i = 0; i < lines.size(); i++) d.drawString(lines[i], cx, y0 + i * lh);
 }
 
-static M5Canvas* getCover(int a, int size);
-// An album: its cover at the top of the card and its name below (or the shelf's picture
-// when there's no cover), on a color picked from the cover.
-static constexpr int AC_COVER = 74;
-static void drawAlbumCard(int a, int x, int y, int w, int h) {
+// An album's cover as a square at x, y (dimmed for the carousel's sides), or its color
+// with the shelf's picture when it has no cover.
+static void drawAlbumArt(int a, int x, int y, int size, bool dim = false) {
   auto& d = M5.Display;
-  M5Canvas* cv = getCover(a, AC_COVER);  // loads the cover first, which also picks its tint
-  uint16_t fill = albumTint(a);
-  drawCardFrame(x, y, w, h, fill);
-  int cx = x + w / 2, top;
-  if (cv) {
-    cv->pushSprite(&d, cx - AC_COVER / 2, y + 8, COVER_KEY);
-    top = y + 8 + AC_COVER + 3;
-  } else {
-    drawShelfIcon(albumKind(a), cx, y + 48, C_WHITE, fill);
-    top = y + 90;
+  if (M5Canvas* cv = getCover(a, size, dim)) { cv->pushSprite(&d, x, y, COVER_KEY); return; }
+  uint16_t c = albumTint(a);
+  if (dim) {  // halfway to the background
+    uint8_t r = ((c >> 11) << 3), g = (((c >> 5) & 63) << 2), b = ((c & 31) << 3);
+    c = rgb((r + 18) / 2, (g + 22) / 2, (b + 48) / 2);
   }
-  int bottom = y + h - 8;
-  drawWrapped(albums[a].name, cx, (top + bottom) / 2, w - 12, (bottom - top) / 17, C_WHITE);
+  d.fillRoundRect(x, y, size, size, size / 8, c);
+  drawShelfIcon(albumKind(a), x + size / 2, y + size / 2, dim ? rgb(150, 156, 190) : C_WHITE, c, size * 100 / 120);
 }
 
 // Something's loaded: the now-playing button has somewhere to go.
@@ -2593,60 +2933,94 @@ static void watchPower() {
 }
 
 // ----- albums -----
-// Three tall album cards under the top bar, page dots centered below; swipe sideways for more.
+// A carousel: one big square cover in the middle with the album's name across the screen
+// below it, and the albums either side peeking in, dimmed. Swipe for the next / previous
+// (it goes round and round with three or more), tap a side cover to turn to it, tap the
+// middle to open it. The ones played most recently come first, then the rest A to Z.
 // The playing album gets a ring and a badge, podcasts with new episodes a dot.
-static constexpr int AL_CARD_Y = CARD_Y, AL_CARD_W = CARD_W, AL_CARD_H = CARD_H, AL_DOTS_Y = 230;  // dots at the very bottom
-static constexpr int AL_GAP = 13, AL_X0 = CARD_X, TILES = 3;
+static constexpr int CV_X = 160 - CV_BIG / 2, CV_Y = NAV_H + 10, CV_GAP = 14;
+static constexpr int CV_SIDE_Y = CV_Y + (CV_BIG - CV_SIDE) / 2;
+static constexpr int CV_LEFT_X = CV_X - CV_GAP - CV_SIDE, CV_RIGHT_X = CV_X + CV_BIG + CV_GAP;
+static constexpr int CV_NAME_Y = CV_Y + CV_BIG + 18;
 
 static int viewShelf = 0;
 static std::vector<int> shelfAlbums;  // indexes into albums for viewShelf
-static int albumPages() { return std::max<int>(1, (shelfAlbums.size() + TILES - 1) / TILES); }
+static int carouselIdx = 0;           // which of shelfAlbums is in the middle
 
 static void showScreen(Screen s);
-// Opens a shelf's albums on the page holding `focus` (an album index), if it's there.
+// Opens a shelf's carousel on `focus` (an album index) if it's there, else the first.
 static void openShelf(int sh, int focus) {
   viewShelf = shelves.empty() ? 0 : constrain(sh, 0, (int)shelves.size() - 1);
   shelfAlbums.clear();
   for (size_t i = 0; i < albums.size(); i++)
     if (albums[i].shelf == viewShelf) shelfAlbums.push_back(i);
+  // most recently played first; the rest stay A to Z
+  std::stable_sort(shelfAlbums.begin(), shelfAlbums.end(),
+                   [](int x, int y) { return recentRank(albums[x].path) < recentRank(albums[y].path); });
   auto it = std::find(shelfAlbums.begin(), shelfAlbums.end(), focus);
-  albumsPage = it == shelfAlbums.end() ? 0 : (it - shelfAlbums.begin()) / TILES;
+  carouselIdx = it == shelfAlbums.end() ? 0 : it - shelfAlbums.begin();
   showScreen(Screen::Albums);
+}
+
+// The albums left and right of the middle one (-1: none). Two albums don't wrap.
+static void carouselSides(int& left, int& right) {
+  int n = shelfAlbums.size();
+  left = right = -1;
+  if (n >= 3) { left = (carouselIdx + n - 1) % n; right = (carouselIdx + 1) % n; }
+  else if (n == 2) { if (carouselIdx == 0) right = 1; else left = 0; }
+}
+
+static void drawCarousel() {
+  auto& d = M5.Display;
+  d.fillRect(0, NAV_H, 320, 240 - NAV_H, C_BG);
+  int n = shelfAlbums.size();
+  if (!n) return;
+  carouselIdx = (carouselIdx % n + n) % n;
+  int a = shelfAlbums[carouselIdx], left, right;
+  carouselSides(left, right);
+  if (left >= 0) drawAlbumArt(shelfAlbums[left], CV_LEFT_X, CV_SIDE_Y, CV_SIDE, true);
+  if (right >= 0) drawAlbumArt(shelfAlbums[right], CV_RIGHT_X, CV_SIDE_Y, CV_SIDE, true);
+  audioPump();
+  if (a == playAlbum)
+    for (int t = 3; t <= 4; t++) d.drawRoundRect(CV_X - t, CV_Y - t, CV_BIG + 2 * t, CV_BIG + 2 * t, CV_BIG / 8 + t, C_WHITE);
+  drawAlbumArt(a, CV_X, CV_Y, CV_BIG);
+  if (a == playAlbum) {
+    d.fillCircle(CV_X + CV_BIG - 16, CV_Y + CV_BIG - 16, 12, C_GREEN);
+    iconPlaying(CV_X + CV_BIG - 16, CV_Y + CV_BIG - 16, C_WHITE);
+  }
+  if (albums[a].newCount > 0) d.fillCircle(CV_X + 14, CV_Y + 14, 7, C_YELLOW);  // new podcast episodes
+  // the name across the screen (one size, two lines at most), the artist under it
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  auto lines = wrapText(albums[a].name, 296, 2);
+  d.setTextDatum(middle_center);
+  d.setTextColor(C_WHITE);
+  int y = CV_NAME_Y;
+  for (auto& l : lines) { d.drawString(l, 160, y); y += 23; }
+  const String& who = albums[a].albumArtist;
+  if (who.length() && who != albums[a].name) {
+    d.setFont(&fonts::FreeSansBold9pt7b);
+    d.setTextColor(C_DIM);
+    d.drawString(fitLine(who, 296), 160, y - 2);
+  }
 }
 
 static void drawAlbums() {
   auto& d = M5.Display;
-  albumsPage = constrain(albumsPage, 0, albumPages() - 1);  // albums may have been deleted
   d.fillScreen(C_BG);
   drawNavBar(1);
-  int pages = albumPages(), n = std::min(pages, 16);
-  for (int p = 0; p < n && pages > 1; p++) {
-    int x = 160 + (p * 2 - (n - 1)) * 13 / 2;
-    if (p == albumsPage) d.fillRoundRect(x - 7, AL_DOTS_Y - 3, 14, 7, 3, C_WHITE);
-    else d.fillCircle(x, AL_DOTS_Y, 3, rgb(74, 81, 128));
-  }
   if (shelfAlbums.empty()) {  // Music, Podcasts and Books show even with nothing in them
-    d.fillRoundRect(16, AL_CARD_Y + 10, 288, 140, 18, C_OFF);
-    drawTitle("Nothing here yet! Ask a grown-up to add some.", 160, AL_CARD_Y + 80, 260, 120, C_WHITE);
+    d.fillRoundRect(16, NAV_H + 20, 288, 150, 18, C_OFF);
+    drawTitle("Nothing here yet! Ask a grown-up to add some.", 160, NAV_H + 95, 260, 130, C_WHITE);
     return;
   }
-  for (int k = 0; k < TILES; k++) {
-    int slot = albumsPage * TILES + k;
-    if (slot >= (int)shelfAlbums.size()) break;
-    int a = shelfAlbums[slot];
-    int x = AL_X0 + k * (AL_CARD_W + AL_GAP), y = AL_CARD_Y;
-    audioPump();
-    if (a == playAlbum)
-      for (int t = 2; t <= 3; t++) d.drawRoundRect(x - t - 1, y - t - 1, AL_CARD_W + 2 * t + 2, AL_CARD_H + 2 * t + 2, 14 + t, C_WHITE);
-    drawAlbumCard(a, x, y, AL_CARD_W, AL_CARD_H);
-    if (a == playAlbum) {
-      d.fillCircle(x + AL_CARD_W - 17, y + AL_CARD_H - 17, 12, C_GREEN);
-      iconPlaying(x + AL_CARD_W - 17, y + AL_CARD_H - 17, C_WHITE);
-    }
-    if (albums[a].newCount > 0) {  // new podcast episodes
-      d.fillCircle(x + 14, y + 14, 7, C_YELLOW);
-    }
-  }
+  drawCarousel();
+}
+
+// At boot: the carousel's covers for every album, big and dimmed, and the song list's.
+static void prepareCarouselArt() {
+  static const int sizes[3] = {CV_BIG, CV_SIDE, CV_HEAD};
+  static const bool dims[3] = {false, true, false};
+  for (size_t a = 0; a < albums.size(); a++) prepareAlbumArt(a, sizes, dims, 3);
 }
 
 // ----- the top bar -----
@@ -2779,18 +3153,16 @@ static void handleShelves(const m5::touch_detail_t& t) {
 }
 
 // ----- songs -----
-// The album's tall card on the left (it slides over from where it was on the album
-// picker), and its songs beside it, all in one font size (long titles wrap onto a second
-// line). Tap a song to play it (the list stays; tap the playing one for its page). Swipe
-// up/down to scroll; the top bar goes back. Podcast episodes have a date badge.
-static constexpr int TC_X = CARD_X, TC_Y = CARD_Y, TC_H = 240 - CARD_Y - 8;  // the card: as on the album picker, down to the bottom
-// Podcasts have no card: the episodes take the whole width, in taller rows.
-static constexpr int TL_Y = CARD_Y;
-static int tlX() { return isPodcastAlbum(viewAlbum) ? 8 : TC_X + AL_CARD_W + 16; }
-static int tlW() { return 306 - tlX(); }
-static int trRowH() { return isPodcastAlbum(viewAlbum) ? 48 : 39; }
-static int trRows() { return isPodcastAlbum(viewAlbum) ? 4 : 5; }
-static int slideFromX = -1;  // set when a card was tapped on the album picker: slide it over
+// A header with the album's cover (it shrinks there from the carousel), its name and its
+// artist; the songs below in full-width rows, all in one font size (long titles wrap onto
+// a second line). Tap a song to play it (the list stays; tap the playing one for its
+// page). Swipe up/down to scroll; the top bar goes back. Podcast episodes have a date badge.
+static constexpr int TH_X = 12, TH_Y = NAV_H + 8, TL_Y = TH_Y + CV_HEAD + 8, TL_X = 8, TL_W = 298;
+static int trRowH() { return isPodcastAlbum(viewAlbum) ? 42 : 32; }
+static int trRows() { return isPodcastAlbum(viewAlbum) ? 3 : 4; }
+static bool shrinkFromCarousel = false;  // set when the carousel's middle cover was tapped
+static int tlX() { return TL_X; }
+static int tlW() { return TL_W; }
 
 static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown in the list
 static std::vector<int32_t> viewSizes;        // ...and each file's size, looked up once (-1: not yet)
@@ -2831,34 +3203,56 @@ static void drawProgressMark(int i, int x0, int x1, int y, int h, bool playing) 
   d.fillRoundRect(x0, y + h - 6, std::max(3, fill), 3, 1, playing ? C_SHADE : C_YELLOW);
 }
 
-// The tapped album's card glides from its place on the album picker to the left edge.
-static void slideCard(int a, int fromX) {
+// The carousel's middle cover shrinks into the song list's header, in a few steps.
+static void shrinkCover(int a) {
   auto& d = M5.Display;
-  int px = fromX;
+  M5Canvas* big = getCover(a, CV_BIG);
+  int px = CV_X, py = CV_Y, ps = CV_BIG;
   for (int f = 1; f <= 4; f++) {
-    int x = fromX + (TC_X - fromX) * f / 4, h = AL_CARD_H + (TC_H - AL_CARD_H) * f / 4;
-    if (x != px) d.fillRect(px - 4, TC_Y - 4, AL_CARD_W + 18, TC_H + 12, C_BG);
-    drawAlbumCard(a, x, TC_Y, AL_CARD_W, h);
-    px = x;
+    int s = CV_BIG + (CV_HEAD - CV_BIG) * f / 4, x = CV_X + (TH_X - CV_X) * f / 4, y = CV_Y + (TH_Y - CV_Y) * f / 4;
+    d.fillRect(px, py, ps, ps, C_BG);
+    if (f == 4) break;  // the last step is the header's own cover
+    if (big) big->pushRotateZoom(&d, x + s / 2.0f, y + s / 2.0f, 0, (float)s / CV_BIG, (float)s / CV_BIG, COVER_KEY);
+    else d.fillRoundRect(x, y, s, s, s / 8, albumTint(a));
+    px = x; py = y; ps = s;
     audioPump();
   }
+}
+
+// The header: the cover, the album's name (two lines at most), and its artist (or how
+// many songs).
+static void drawTrackHeader() {
+  auto& d = M5.Display;
+  drawAlbumArt(viewAlbum, TH_X, TH_Y, CV_HEAD);
+  int tx = TH_X + CV_HEAD + 12, tw = 312 - tx;
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  auto lines = wrapText(albums[viewAlbum].name, tw, 2);
+  String sub = albums[viewAlbum].albumArtist;
+  if (!sub.length() || isPodcastAlbum(viewAlbum)) {
+    int n = viewTracks.size();
+    const char* noun = isPodcastAlbum(viewAlbum) ? "episode" : albumKind(viewAlbum) == ShelfKind::Books ? "chapter" : "song";
+    sub = String(n) + " " + noun + (n == 1 ? "" : "s");
+  }
+  int lh = 22, y0 = TH_Y + CV_HEAD / 2 - (int)lines.size() * lh / 2 - 6;
+  d.setTextDatum(middle_left);
+  d.setTextColor(C_WHITE);
+  for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, y0 + k * lh + lh / 2);
+  d.setFont(&fonts::FreeSansBold9pt7b);
+  d.setTextColor(C_DIM);
+  d.drawString(fitLine(sub, tw), tx, y0 + lines.size() * lh + 9);
 }
 
 static void drawTrackRows();
 static void drawTracks() {
   auto& d = M5.Display;
-  bool podcast = isPodcastAlbum(viewAlbum);
-  if (slideFromX >= 0 && !podcast) {  // just picked: keep only that card, then move it over
-    d.fillScreen(C_BG);
-    drawNavBar(2);
-    drawAlbumCard(viewAlbum, slideFromX, AL_CARD_Y, AL_CARD_W, AL_CARD_H);
-    slideCard(viewAlbum, slideFromX);
-  } else {
-    d.fillScreen(C_BG);
-    drawNavBar(2);
-    if (!podcast) drawAlbumCard(viewAlbum, TC_X, TC_Y, AL_CARD_W, TC_H);
+  d.fillScreen(C_BG);
+  drawNavBar(2);
+  if (shrinkFromCarousel) {  // just picked: the big cover shrinks into the header
+    drawAlbumArt(viewAlbum, CV_X, CV_Y, CV_BIG);
+    shrinkCover(viewAlbum);
   }
-  slideFromX = -1;
+  shrinkFromCarousel = false;
+  drawTrackHeader();
   drawTrackRows();
 }
 
@@ -2895,8 +3289,8 @@ static void drawTrackRows() {
       }
       d.setFont(&fonts::DejaVu12);
       int tx = tlX() + 54, tw = tlW() - 54 - 18;
-      auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 3);
-      int lh = 13, ty = my - (int)(lines.size() - 1) * lh / 2;
+      auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
+      int lh = 14, ty = my - (int)(lines.size() - 1) * lh / 2;
       d.setTextDatum(middle_left);
       d.setTextColor(C_WHITE);
       for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
@@ -3082,7 +3476,7 @@ static void drawStats() {
     static uint64_t sdUsed = 0, sdTotal = 0;
     if (songCountCache < 0) {  // slow-ish (lists every album, scans the FAT), so once per library change
       songCountCache = 0;
-      for (size_t a = 0; a < albums.size(); a++) songCountCache += (int)a == playAlbum ? tracks.size() : listTracks(a).size();
+      for (size_t a = 0; a < albums.size(); a++) songCountCache += (int)a == playAlbum ? tracks.size() : countTracks(a);
       sdUsed = SD.usedBytes();
       sdTotal = SD.totalBytes();
     }
@@ -3373,21 +3767,29 @@ static void handlePlayer(const m5::touch_detail_t& t) {
 }
 
 static void handleAlbums(const m5::touch_detail_t& t) {
+  int n = shelfAlbums.size();
+  if (!n) return;
+  auto turn = [&](int by) {  // round and round with three or more; two just switch
+    int idx = carouselIdx + by;
+    idx = n >= 3 ? (idx % n + n) % n : constrain(idx, 0, n - 1);
+    if (idx == carouselIdx) return;
+    buzz();
+    carouselIdx = idx;
+    drawCarousel();
+    if (snackUp()) drawSnack();
+  };
   int dir;
-  if (flickedX(t, dir)) {  // swipe left = next page
-    int p = constrain(albumsPage + dir, 0, albumPages() - 1);
-    if (p != albumsPage) { buzz(); albumsPage = p; dirtyAll = true; }
-    return;
-  }
-  if (!t.wasClicked() || t.y >= AL_CARD_Y + AL_CARD_H + 8) return;
-  for (int k = 0; k < TILES; k++) {
-    int x = AL_X0 + k * (AL_CARD_W + AL_GAP), slot = albumsPage * TILES + k;
-    if (t.x >= x - AL_GAP / 2 && t.x < x + AL_CARD_W + AL_GAP / 2 && slot < (int)shelfAlbums.size()) {
-      buzz();
-      openTracks(shelfAlbums[slot]);
-      slideFromX = x;  // its card slides over to the song list
-      return;
-    }
+  if (flickedX(t, dir)) { turn(dir); return; }  // swipe left = the next album
+  if (!t.wasClicked() || t.y < NAV_H + 4) return;
+  int left, right;
+  carouselSides(left, right);
+  if (t.x >= CV_X - 6 && t.x < CV_X + CV_BIG + 6) {  // the middle (cover or name): open it
+    buzz();
+    shrinkFromCarousel = true;
+    openTracks(shelfAlbums[carouselIdx]);
+  } else if (t.y < CV_Y + CV_BIG + 12) {
+    if (t.x < CV_X && left >= 0) turn(-1);
+    else if (t.x >= CV_X + CV_BIG && right >= 0) turn(1);
   }
 }
 
@@ -3786,8 +4188,10 @@ void setup() {
     while (true) delay(1000);
   }
 
+  loadRecent();
   rescanLibrary();
   prepareCovers();
+  prepareCarouselArt();
   while (!nightBoot && millis() - splashAt < SPLASH_MS) delay(10);  // splash for at least 5 s (not on dark night boots)
   M5.Display.fillScreen(C_BG);
   Serial.printf("READY %s %u albums %s\n", CORE2_WIFI ? "wifi" : "bt", (unsigned)albums.size(), TT_VERSION);
