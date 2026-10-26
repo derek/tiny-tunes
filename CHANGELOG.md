@@ -7,9 +7,18 @@ e.g. `0.3.0+6.cb61af8`.
 ## Unreleased
 
 ### Added
+- Home has a "Keep listening" card at the top when something's loaded: its cover and
+  title, and a play button. One tap carries on playing and opens the player. The shelves
+  get shorter to make room; with nothing loaded, Home is as before.
+- Tests for the title clean-up and the ID3 tag reader that run on a computer
+  (`test/run.sh`). Those functions moved from `tiny-tunes.ino` into `tt_text.h`.
 - `tags.py`: fix song tags with a spreadsheet. `export` writes every song's title,
   artist, album, album artist, track and disc to a CSV; `apply` shows what would change
   and writes the edits back into the MP3s (keeping their ID3 version and cover art).
+
+### Changed
+- When Bluetooth headphones disconnect while something's playing, it pauses instead of
+  carrying on out loud. The snackbar says "Headphones off — paused".
 
 ## 0.9.9 — 2026-10-26
 

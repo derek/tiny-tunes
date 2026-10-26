@@ -12,7 +12,8 @@ everything on it chosen by a grown-up.
 ## Using it
 
 - **Home** (the middle touch button below the screen) shows the shelves: Podcasts, Music
-  and Books. Podcasts says how many episodes are new.
+  and Books. Podcasts says how many episodes are new. Above them, **Keep listening** has
+  whatever was playing last: one tap carries on and opens the player.
 - **Albums** are a carousel of covers: swipe left and right, round and round. The ones
   played most recently come first. Tap the middle one to open it.
 - **Songs** play when tapped; the list stays put. Tap the song that's playing for the
@@ -24,7 +25,8 @@ everything on it chosen by a grown-up.
 - **The top bar** has back on the left and, on the right, the now-playing button: its bars
   bounce on green while something plays; tap it for the player.
 - **Snackbars** at the bottom say when the battery is low, it's charging, or headphones
-  connect.
+  connect. When headphones disconnect, the sound pauses rather than carrying on out
+  loud.
 - **The power button:** a tap turns the screen off and on (the sound keeps playing);
   holding it for a second switches Tiny Tunes off.
 
@@ -114,13 +116,18 @@ python3 -m venv ~/.venvs/esp && ~/.venvs/esp/bin/pip install esptool pyserial mu
 ./flash.sh --no-build          # flash the last build again
 ```
 
+`test/run.sh` runs the tests for the title and tag code on the computer (needs a C++17
+compiler, such as the one in Xcode's command line tools).
+
 The version (grown-ups → Stats, and the web page's footer) is `VERSION` plus the build
 number and commit, e.g. `0.9.3+32.08831bd`.
 
 ## Files
 
-- `tiny-tunes.ino`: the whole firmware, both modes (`#if CORE2_WIFI`), including the web
+- `tiny-tunes.ino`: the firmware, both modes (`#if CORE2_WIFI`), including the web
   page and the USB serial protocol (documented above `handleSerial()`).
+- `tt_text.h`: title clean-up and the ID3 tag reader, kept apart so `test/run.sh` can
+  test them on a computer.
 - `upload.py`: uploads, WiFi setup, mode switching, naming.
 - `tags.py`: export song tags to a spreadsheet and write the edits back.
 - `screenshot.py`: screenshots from the device's display (`--tour docs/screenshots` makes

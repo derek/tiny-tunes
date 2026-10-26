@@ -40,6 +40,13 @@ and the SD card layout.
   read in raw panel coordinates, so turning the screen upside down (`ROTATION = 3`)
   swaps the left and right ones.
 
+## Tests
+
+`test/run.sh` builds and runs `test/test_text.cpp` on the computer (any C++17
+compiler; `test/arduino_string.h` stands in for Arduino's `String`). It covers
+`tt_text.h`: title clean-up, ASCII folding and the ID3 reader. Run it after touching
+those, and put new pure helpers there (not in the `.ino`) when they're worth testing.
+
 ## Screenshots
 
 `screenshot.py` reads the screen back over USB (`SHOT`) and can open screens and load
