@@ -2942,12 +2942,12 @@ static void iconBatteryBig(int x, int y, int pct, bool charging, uint16_t bg) { 
     d.fillTriangle(x + 13, y + 13, x + 18, y + 8, x + 14, y + 8, C_WHITE);
   }
 }
-static void iconWifi(int cx, int cy, uint16_t c) {  // the dot at cx, cy + 6
+static void iconWifi(int cx, int cy, uint16_t c) {  // about 16 x 12, the dot at cx, cy + 5
   auto& d = M5.Display;
-  d.fillCircle(cx, cy + 6, 2, c);
-  d.fillArc(cx, cy + 6, 7, 5, 225, 315, c);
-  d.fillArc(cx, cy + 6, 12, 10, 225, 315, c);
-  d.fillArc(cx, cy + 6, 17, 15, 225, 315, c);
+  d.fillCircle(cx, cy + 5, 1, c);
+  d.fillArc(cx, cy + 5, 5, 3, 225, 315, c);
+  d.fillArc(cx, cy + 5, 9, 7, 225, 315, c);
+  d.fillArc(cx, cy + 5, 13, 11, 225, 315, c);
 }
 
 static bool statusLink() {  // headphones (Bluetooth mode) or WiFi (WiFi mode) to show
@@ -2991,7 +2991,7 @@ static void drawHomeStatus(uint16_t bar) {
   if (batPct >= 0) iconBatteryBig(bx, NAV_CY - 8, batPct, batUsb, bar);
   if (statusLink()) {
 #if CORE2_WIFI
-    iconWifi(bx - 22, NAV_CY - 3, webUp ? C_WHITE : C_DIM);
+    iconWifi(bx - 16, NAV_CY - 1, webUp ? C_WHITE : C_DIM);
 #else
     iconHeadphones(bx - 20, NAV_CY - 8, C_WHITE);
 #endif
