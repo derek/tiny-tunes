@@ -2972,12 +2972,12 @@ static uint32_t homeStatusShown = 0;
 static void drawHomeStatus(uint16_t bar) {
   auto& d = M5.Display;
   homeStatusShown = homeStatusKey();
-  d.setFont(&fonts::FreeSansBold12pt7b);
+  d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextColor(C_WHITE);
   int h, m, clockW = 0;
   if (rtcNow(h, m)) {
-    char t[8];
-    snprintf(t, sizeof t, "%d:%02d", h % 12 ? h % 12 : 12, m);
+    char t[12];
+    snprintf(t, sizeof t, "%d:%02d %s", h % 12 ? h % 12 : 12, m, h < 12 ? "AM" : "PM");
     d.setTextDatum(middle_center);
     d.drawString(t, 160, NAV_CY + 1);
     clockW = d.textWidth(t);
@@ -3055,7 +3055,7 @@ static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's
     drawRound(NB_X, NAV_CY - 1, NB_R, bar == C_BAR ? C_OFF : mix565(bar, C_SHADE, 1, 3));  // on a colored bar: a darker shade of it
     iconArrow(NB_X - 1, NAV_CY - 1, 0, C_WHITE);
     if (known) {
-      d.setFont(&fonts::FreeSansBold12pt7b);
+      d.setFont(&fonts::FreeSansBold9pt7b);
       d.setTextDatum(middle_left);
       d.setTextColor(C_WHITE);
       d.drawString(fitLine(shelves[shelf].name, VB_X - NB_X - NB_R - 24), NB_X + NB_R + 12, NAV_CY + 1);
