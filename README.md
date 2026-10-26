@@ -7,7 +7,7 @@ everything on it chosen by a grown-up.
 
 | Home | Albums | Songs | Player |
 |---|---|---|---|
-| ![Home: Podcasts, Music and Books](docs/screenshots/home.png) | ![Albums: a carousel of covers](docs/screenshots/albums.png) | ![Songs: the album's cover and its songs](docs/screenshots/songs.png) | ![The player](docs/screenshots/player.png) |
+| ![Home: Keep listening, then Podcasts, Music and Books](docs/screenshots/home.png) | ![Albums: a carousel of covers](docs/screenshots/albums.png) | ![Songs: the album's cover and its songs](docs/screenshots/songs.png) | ![The player](docs/screenshots/player.png) |
 
 ## Using it
 
