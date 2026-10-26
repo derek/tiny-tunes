@@ -11,8 +11,10 @@ e.g. `0.3.0+6.cb61af8`.
   with its picture over its name, and new podcast episodes as a yellow number in the
   corner. With nothing loaded, they sit in the middle of the screen.
 - The Podcasts shelf is called "Pods", so the name fits its card.
-- The now-playing button in the top bar is hidden for now (Home's Keep listening card
-  and tapping the playing song still open the player), to see whether it's missed.
+- The now-playing button in the top bar isn't on Home any more (the Keep listening card
+  does that job). Leaving Home for a shelf, the card's cover shrinks up into the top
+  bar's corner and becomes the button.
+- Keep listening's title scrolls like a marquee when it's too long to fit.
 - The Home button does nothing on Home (it used to repaint the screen).
 
 ## 0.10.0 — 2026-10-26

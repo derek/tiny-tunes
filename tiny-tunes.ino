@@ -2237,6 +2237,7 @@ static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) { return M5.Display.color56
 #define C_OFF   rgb(50, 56, 92)
 #define C_BLUE  rgb(25, 150, 220)
 #define C_GREEN rgb(46, 196, 120)
+#define C_BAR   rgb(14, 17, 40)  // the top bar
 #define C_ORANGE rgb(255, 146, 76)
 #define C_YELLOW rgb(255, 210, 0)
 #define C_PANEL rgb(28, 33, 66)
@@ -2880,10 +2881,18 @@ static void drawCarousel() {
   for (auto& l : lines) { d.drawString(l, 160, y); y += 23; }
 }
 
+static bool flyingFromHome = false;  // Home -> a shelf: Keep listening's cover is on its way to the now-playing button
+static void flyToNowPlaying();      // see "shelves"
+static void drawNowPlayingButton(bool bounce);
 static void drawAlbums() {
   auto& d = M5.Display;
   d.fillScreen(C_BG);
   drawNavBar(1);
+  if (flyingFromHome) {  // from Home: the Keep listening cover becomes the now-playing button
+    if (haveNowPlaying()) { flyToNowPlaying(); drawNavBar(1); }  // the bar again: the cover crossed its name
+    flyingFromHome = false;
+    drawNowPlayingButton(false);
+  }
   if (shelfAlbums.empty()) {  // Music, Podcasts and Books show even with nothing in them
     d.fillRoundRect(16, NAV_H + 20, 288, 150, 18, C_OFF);
     drawTitle("Nothing here yet! Ask a grown-up to add some.", 160, NAV_H + 95, 260, 130, C_WHITE);
@@ -2916,9 +2925,10 @@ static bool navHasBack() { return screen != Screen::Shelves; }
 
 // Top right on every screen: three sound bars, bouncing on green while something plays,
 // still and grey when it's paused (or nothing is loaded). Tap it for the player.
-static constexpr bool SHOW_NOW_PLAYING_BUTTON = false;  // hidden while Home's Keep listening card is tried out
+// Not on Home: its Keep listening card does that job (and flies up into this button
+// when Home is left for a shelf).
 static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random bar heights
-  if (!SHOW_NOW_PLAYING_BUTTON) return;
+  if (screen == Screen::Shelves || flyingFromHome) return;
   static uint8_t heights[3] = {9, 15, 12};
   static uint32_t seed = 88675123;  // xorshift; libc rand() costs IRAM
   auto& d = M5.Display;
@@ -2935,7 +2945,7 @@ static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random b
 // now-playing button.
 static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's songs, 3 the player
   auto& d = M5.Display;
-  uint16_t bar = rgb(14, 17, 40);
+  uint16_t bar = C_BAR;
   d.fillRect(0, 0, 320, NAV_H, bar);
   if (level == 0) {
     drawHouse(NB_X, NAV_CY, C_WHITE, bar);
@@ -2959,7 +2969,7 @@ static void openTracks(int a);
 static bool handleNavBar(const m5::touch_detail_t& t) {
   if (!t.wasClicked() || t.y >= NAV_H + 6) return false;
   if (t.x >= VB_X - 10) {  // the now-playing button (on the player: already there)
-    if (!SHOW_NOW_PLAYING_BUTTON) return true;
+    if (screen == Screen::Shelves) return true;  // Home has no button
     if (screen != Screen::Player && haveNowPlaying()) { buzz(); showScreen(Screen::Player); }
     return true;
   }
@@ -3000,11 +3010,60 @@ static void shelfTileRect(int i, int& x, int& y, int& w, int& h) {
   y = top + (i / 3) * (h + SH_GAP);
 }
 
+// The title scrolls like a marquee when it's too long: a pause at the start, round it
+// goes, a pause again.
+#define C_KL rgb(30, 36, 78)  // the card's fill
+static constexpr int KL_GAP = 48, KL_HOLD_MS = 1500;
+static String klTitle;
+static int klX = 0, klW = 0, klOff = 0;  // where the title goes, its room, how far it has scrolled
+static uint32_t klHoldUntil = 0;
+
+static void drawKeepTitle() {
+  auto& d = M5.Display;
+  int y = KL_Y + 45;
+  d.setFont(&fonts::FreeSansBold12pt7b);
+  int tw = d.textWidth(klTitle);
+  if (tw <= klW) {  // fits: still
+    d.setTextDatum(middle_left);
+    d.setTextColor(C_WHITE);
+    d.drawString(klTitle, klX, y);
+    return;
+  }
+  static M5Canvas* strip = nullptr;
+  if (!strip) {
+    strip = new M5Canvas(&d);
+    strip->setPsram(true);
+    strip->setColorDepth(16);
+  }
+  if (strip->width() != klW && (!strip->createSprite(klW, 28))) return;
+  strip->fillSprite(C_KL);
+  strip->setFont(&fonts::FreeSansBold12pt7b);
+  strip->setTextDatum(middle_left);
+  strip->setTextColor(C_WHITE);
+  strip->drawString(klTitle, -klOff, 14);
+  strip->drawString(klTitle, tw + KL_GAP - klOff, 14);  // round again
+  strip->pushSprite(&d, klX, y - 14);
+}
+
+// Called often from loop(): moves an overflowing title along.
+static void tickKeepTitle(uint32_t now) {
+  static uint32_t last = 0;
+  if (screen != Screen::Shelves || !homeTile() || dimmed || screenOff || now - last < 40) return;
+  last = now;
+  if ((int32_t)(now - klHoldUntil) < 0 || !klTitle.length()) return;
+  M5.Display.setFont(&fonts::FreeSansBold12pt7b);
+  int tw = M5.Display.textWidth(klTitle);
+  if (tw <= klW) return;
+  klOff += 2;
+  if (klOff >= tw + KL_GAP) { klOff = 0; klHoldUntil = now + KL_HOLD_MS; }
+  drawKeepTitle();
+}
+
 static void drawKeepListening() {
   if (!homeTile()) return;
   auto& d = M5.Display;
   bool on = musicIsPlaying();
-  drawCardFrame(KL_X, KL_Y, KL_W, KL_H, rgb(30, 36, 78));
+  drawCardFrame(KL_X, KL_Y, KL_W, KL_H, C_KL);
   drawAlbumArt(playAlbum, KL_X + 4, KL_Y + 4, CV_HEAD);
   int bx = KL_X + KL_W - 34, cy = KL_Y + KL_H / 2, tx = KL_X + CV_HEAD + 16, tw = bx - 24 - tx;
   d.setTextDatum(middle_left);
@@ -3012,9 +3071,11 @@ static void drawKeepListening() {
   d.setTextColor(on ? C_GREEN : C_DIM);
   d.drawString(on ? "Now playing" : "Keep listening", tx, KL_Y + 21);
   String title = isBook(playAlbum) ? albums[playAlbum].name : trackTitle(tracks[current], playAlbum);
-  d.setFont(&fonts::FreeSansBold12pt7b);
-  d.setTextColor(C_WHITE);
-  d.drawString(fitLine(title, tw), tx, KL_Y + 45);
+  if (title != klTitle || tx != klX || tw != klW) {  // a new title starts from the beginning
+    klTitle = title; klX = tx; klW = tw; klOff = 0;
+    klHoldUntil = millis() + KL_HOLD_MS;
+  }
+  drawKeepTitle();
   d.fillCircle(bx, cy, 21, C_GREEN);
   if (on) iconPlaying(bx, cy, C_WHITE);
   else iconPlay(bx, cy, 18, C_WHITE);
@@ -3054,6 +3115,31 @@ static void drawShelves() {
   }
 }
 
+// Leaving Home for a shelf: the Keep listening cover shrinks up into the top bar's
+// corner and becomes the now-playing button (the same steps as the carousel's cover
+// shrinking into the song list).
+static void flyToNowPlaying() {
+  auto& d = M5.Display;
+  M5Canvas* cv = getCover(playAlbum, CV_HEAD);
+  const int x0 = KL_X + 4, y0 = KL_Y + 4, s1 = VB_H, x1 = VB_X + VB_W / 2 - s1 / 2, y1 = VB_Y;
+  auto wipe = [&](int x, int y, int s) {  // background below the bar, the bar's color in it
+    int top = y - 2, bottom = y + s + 2;
+    if (bottom > NAV_H) d.fillRect(x - 2, std::max(top, NAV_H), s + 4, bottom - std::max(top, NAV_H), C_BG);
+    if (top < NAV_H) d.fillRect(x - 2, top, s + 4, std::min(bottom, NAV_H) - top, C_BAR);
+  };
+  drawAlbumArt(playAlbum, x0, y0, CV_HEAD);
+  int px = x0, py = y0, ps = CV_HEAD;
+  for (int f = 1; f <= 4; f++) {
+    int sz = CV_HEAD + (s1 - CV_HEAD) * f / 4, x = x0 + (x1 - x0) * f / 4, y = y0 + (y1 - y0) * f / 4;
+    wipe(px, py, ps);
+    if (f == 4) break;  // the last step is the button itself
+    if (cv) cv->pushRotateZoom(&d, x + sz / 2.0f, y + sz / 2.0f, 0, (float)sz / CV_HEAD, (float)sz / CV_HEAD, COVER_KEY);
+    else d.fillRoundRect(x, y, sz, sz, sz / 8, albumTint(playAlbum));
+    px = x; py = y; ps = sz;
+    audioPump();
+  }
+}
+
 static void handleShelves(const m5::touch_detail_t& t) {
   if (!t.wasClicked()) return;
   if (homeTile() && t.y >= KL_Y - 3 && t.y < KL_Y + KL_H + 3) {  // Keep listening: play it, and its page
@@ -3067,6 +3153,7 @@ static void handleShelves(const m5::touch_detail_t& t) {
     shelfTileRect(i, x, y, w, h);
     if (t.x >= x - 3 && t.x < x + w + 3 && t.y >= y - 3 && t.y < y + h + 3) {
       buzz();
+      flyingFromHome = homeTileShown;  // drawAlbums() flies the card's cover up to the button
       openShelf(i, playAlbum >= 0 && albums[playAlbum].shelf == i ? playAlbum : -1);
       return;
     }
@@ -4347,6 +4434,7 @@ void loop() {
     lastBounce = now;
     drawNowPlayingButton(true);  // the green button's bars dance while music plays
   }
+  tickKeepTitle(now);  // Home: Keep listening's long title scrolls
   if (litControl >= 0 && (int32_t)(now - litUntil) >= 0) {
     if (screen == Screen::Player && !dimmed) drawControl(litControl, false);
     litControl = -1;
