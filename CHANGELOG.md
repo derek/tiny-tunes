@@ -6,6 +6,15 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.6 — 2026-10-26
+
+### Fixed
+- The player's buttons were hard to tap, the volume ones especially (5 mm targets
+  against the screen's edges). The row is now five equal 8 mm columns, the full height of
+  the row, so a tap anywhere lands on a button; the buttons are a bit bigger and the
+  volume ones moved in from the edges. A tapped button lights up for a moment, and a tap
+  may move a little more before it counts as a swipe.
+
 ## 0.9.5 — 2026-10-26
 
 ### Fixed

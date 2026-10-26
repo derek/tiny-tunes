@@ -2460,7 +2460,10 @@ static constexpr int CV_BIG = 116, CV_SIDE = 76, CV_HEAD = 60;
 // left, and a progress bar to drag: the song, or for books the whole book (a tick between
 // chapters). Swipe for the next / previous track too.
 static constexpr int P_COVER_X = 12, P_COVER_Y = NAV_H + 8, P_COVER = CV_HEAD, P_CTRL_Y = 158;  // = the song list's header
-static constexpr RoundButton B_PLAY{160, 34}, B_PREV{92, 24}, B_NEXT{228, 24}, B_QUIET{30, 20}, B_LOUD{290, 20};
+// Five equal columns, 64 px (8 mm) wide; a tap anywhere in a column, the full height of the
+// row, is that button. Quieter, previous, play, next, louder.
+static constexpr RoundButton B_QUIET{32, 24}, B_PREV{96, 26}, B_PLAY{160, 34}, B_NEXT{224, 26}, B_LOUD{288, 24};
+static constexpr int P_ROW_TOP = P_CTRL_Y - 42, P_ROW_BOTTOM = P_CTRL_Y + 42;
 static constexpr int VOL_DOTS_Y = 204, P_LABEL_Y = 205;               // the level under play, labels either side
 static constexpr int PB_X = 22, PB_Y = 220, PB_W = 276, PB_H = 14;  // progress: drag or tap to jump
 static constexpr int VB_X = 244, VB_Y = 5, VB_W = 68, VB_H = 26;  // the top bar's now-playing button
@@ -2496,7 +2499,6 @@ static bool hitAt(int cx, int cy, int r, int x, int y) {
   r += 8;  // fingers are bigger than the buttons look
   return dx * dx + dy * dy <= r * r;
 }
-static bool hit(const RoundButton& b, int cy, int x, int y) { return hitAt(b.x, cy, b.r, x, y); }
 
 static bool musicIsPlaying() { return !paused && mp3 && mp3->isRunning(); }
 
@@ -2801,23 +2803,30 @@ static void drawTimeLeft(bool force) {
   d.drawString(right, PB_X + PB_W, P_LABEL_Y);
 }
 
-static void drawPlayButton(const RoundButton& b) {
-  drawRound(b.x, P_CTRL_Y, b.r, C_GREEN);
-  if (paused || tracks.empty()) iconPlay(b.x, P_CTRL_Y, b.r * 8 / 9, C_WHITE);
-  else iconPause(b.x, P_CTRL_Y, b.r * 8 / 10, C_WHITE);
+// One of the row's buttons (0 quieter, 1 previous, 2 play, 3 next, 4 louder); `lit`
+// draws it lighter for a moment so a tap shows it landed.
+static void drawControl(int i, bool lit) {
+  static const RoundButton* B[5] = {&B_QUIET, &B_PREV, &B_PLAY, &B_NEXT, &B_LOUD};
+  const RoundButton& b = *B[i];
+  if (i == 2) {
+    drawRound(b.x, P_CTRL_Y, b.r, lit ? rgb(120, 230, 170) : C_GREEN);
+    if (paused || tracks.empty()) iconPlay(b.x, P_CTRL_Y, b.r * 8 / 9, C_WHITE);
+    else iconPause(b.x, P_CTRL_Y, b.r * 8 / 10, C_WHITE);
+    return;
+  }
+  bool vol = i == 0 || i == 4;
+  drawRound(b.x, P_CTRL_Y, b.r, lit ? (vol ? rgb(100, 108, 160) : rgb(110, 195, 245)) : (vol ? C_OFF : C_BLUE));
+  if (vol) iconSpeakerWaves(b.x, P_CTRL_Y, i == 4 ? 2 : 0, C_WHITE);
+  else iconSkip(b.x, P_CTRL_Y, 24, i == 3, C_WHITE);
 }
+
+static int litControl = -1;      // lit by a tap, until litUntil
+static uint32_t litUntil = 0;
 
 static void drawControls() {
   M5.Display.fillRect(0, P_CTRL_Y - B_PLAY.r - 3, 320, B_PLAY.r * 2 + 6, C_BG);
-  drawRound(B_QUIET.x, P_CTRL_Y, B_QUIET.r, C_OFF);
-  iconSpeakerWaves(B_QUIET.x, P_CTRL_Y, 0, C_WHITE);
-  drawRound(B_PREV.x, P_CTRL_Y, B_PREV.r, C_BLUE);
-  iconSkip(B_PREV.x, P_CTRL_Y, 22, false, C_WHITE);
-  drawPlayButton(B_PLAY);
-  drawRound(B_NEXT.x, P_CTRL_Y, B_NEXT.r, C_BLUE);
-  iconSkip(B_NEXT.x, P_CTRL_Y, 22, true, C_WHITE);
-  drawRound(B_LOUD.x, P_CTRL_Y, B_LOUD.r, C_OFF);
-  iconSpeakerWaves(B_LOUD.x, P_CTRL_Y, 2, C_WHITE);
+  for (int i = 0; i < 5; i++) drawControl(i, false);
+  litControl = -1;
   drawVolumeDots();
 }
 
@@ -3839,11 +3848,17 @@ static void handlePlayer(const m5::touch_detail_t& t) {
   int dir;
   if (flickedX(t, dir)) { buzz(); playTrack(current + dir); return; }  // swipe left = next song, right = previous
   if (!t.wasClicked()) return;
-  if (hit(B_PLAY, P_CTRL_Y, t.x, t.y)) { buzz(); togglePause(); }
-  else if (hit(B_PREV, P_CTRL_Y, t.x, t.y)) { buzz(); playTrack(current - 1); }
-  else if (hit(B_NEXT, P_CTRL_Y, t.x, t.y)) { buzz(); playTrack(current + 1); }
-  else if (hit(B_QUIET, P_CTRL_Y, t.x, t.y)) { buzz(); changeVolume(-1); }
-  else if (hit(B_LOUD, P_CTRL_Y, t.x, t.y)) { buzz(); changeVolume(1); }
+  if (t.y < P_ROW_TOP || t.y >= P_ROW_BOTTOM) return;
+  int i = constrain(t.x / 64, 0, 4);  // the column it landed in
+  buzz();
+  drawControl(i, true);  // lit for a moment (a new song or play / pause redraws the row anyway)
+  litControl = i;
+  litUntil = millis() + 160;
+  if (i == 0) changeVolume(-1);
+  else if (i == 1) playTrack(current - 1);
+  else if (i == 2) togglePause();
+  else if (i == 3) playTrack(current + 1);
+  else changeVolume(1);
 }
 
 // Where a book picks up: the first chapter not finished yet (from the start once all are).
@@ -4307,6 +4322,7 @@ void setup() {
   cfg.serial_baudrate = 460800;  // the Core2's CH9102 garbles 921600
   M5.begin(cfg);
   M5.Display.setRotation(ROTATION);
+  M5.Touch.setFlickThresh(16);  // a tap may move a little before it counts as a swipe (default 8 px)
   prefs.begin("core2mp3");  // settings namespace from the project's first name; renaming it would reset them
   bool nightBoot = prefs.getUChar("nightboot", 0);  // a quiet reboot for the nightly podcast sync
   M5.Display.setBrightness(nightBoot ? 0 : 140);   // the saved brightness is applied below
@@ -4452,6 +4468,10 @@ void loop() {
   if (library && musicIsPlaying() && !dimmed && now - lastBounce > 150) {
     lastBounce = now;
     drawNowPlayingButton(true);  // the green button's bars dance while music plays
+  }
+  if (litControl >= 0 && (int32_t)(now - litUntil) >= 0) {
+    if (screen == Screen::Player && !dimmed) drawControl(litControl, false);
+    litControl = -1;
   }
   if (screen == Screen::Player && !dimmed && !tracks.empty() && now - lastTick > 1000) {
     lastTick = now;
