@@ -194,12 +194,23 @@ class TinyA2DP : public BluetoothA2DPSource {
     s_a2d_state = APP_AV_STATE_DISCOVERING;
     esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
   }
+  // Volume is ours (applyVolume() -> btVolume), not the library's curve, and isn't sent
+  // to the headphones/speaker: their own volume stays wherever a grown-up left it.
+  void set_volume(uint8_t) override {}
   bool isSaved(const uint8_t* addr) {  // the last headphones/speaker we connected to
     static const uint8_t none[ESP_BD_ADDR_LEN] = {0};
     return memcmp(last_connection, none, ESP_BD_ADDR_LEN) && !memcmp(addr, last_connection, ESP_BD_ADDR_LEN);
   }
 };
 static TinyA2DP a2dp;
+
+// Scales the Bluetooth audio by a factor out of 4096 (= as decoded), set by applyVolume().
+class TinyVolume : public A2DPVolumeControl {
+ public:
+  void setFactor(int32_t f) { volumeFactor = f; is_volume_used = true; }
+  void set_volume(uint8_t) override {}
+};
+static TinyVolume btVolume;
 
 // ---------- ring buffer: decoder (loop task) -> A2DP callback (BT task) ----------
 // Single producer / single consumer, so atomics on head/tail are enough.
@@ -1944,11 +1955,25 @@ static void togglePause() {
   dirtyNow = true;
 }
 
+// The five steps are even in loudness: step 1 is always 18 dB under full (quiet, never
+// silent), step 5 is the grown-ups' Loudest (100% = full, 70% = -6 dB, 50% = -12 dB, as
+// before), evenly between: at 100%, 4.5 dB a step. volLevel counts half steps (0..10;
+// 0 is off, the kids' buttons stop at step 1). The speaker squares its volume setting,
+// so it gets the square root.
+static constexpr float VOL_FLOOR_DB = -18.0f;
+static float volumeGain() {  // amplitude, 0..1
+  if (volLevel <= 0) return 0;
+  float capDb = std::max(VOL_FLOOR_DB, 40.0f * log10f(maxVolPct / 100.0f));
+  float db = VOL_FLOOR_DB + (capDb - VOL_FLOOR_DB) * (volLevel - 2) / 8.0f;
+  return powf(10.0f, db / 20.0f);
+}
+
 static void applyVolume() {
-  volume = volLevel * maxVolPct * 255 / 1000;
+  float g = volumeGain();
+  volume = (uint8_t)lroundf(255.0f * sqrtf(g));
   M5.Speaker.setVolume(volume);
 #if !CORE2_WIFI
-  a2dp.set_volume(volume / 2);  // A2DP volume is 0..127
+  btVolume.setFactor(std::min(4095L, lroundf(4096.0f * g)));
 #endif
 }
 
@@ -4542,6 +4567,7 @@ void setup() {
   a2dp.set_ssid_callback(onBtDeviceFound);
   a2dp.set_on_connection_state_changed(onBtState);
   a2dp.set_auto_reconnect(true);
+  a2dp.set_volume_control(&btVolume);
   a2dp.set_data_callback_in_frames(btGetFrames);
   a2dp.start();
   a2dp.continuousScan(false);  // scan in bursts (see TinyA2DP)

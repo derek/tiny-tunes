@@ -6,6 +6,13 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+### Changed
+- The five volume steps are even in loudness, and step 1 is quiet but always audible
+  (before, it was 28 dB down or more: near silent on the speaker). Step 1 is 18 dB under
+  full, step 5 is the grown-ups' Loudest, evenly in between (4.5 dB a step at 100%).
+  Bluetooth gets the same levels, and the device no longer changes the headphones' or
+  speaker's own volume.
+
 ## 0.12.0 — 2026-10-26
 
 ### Fixed
