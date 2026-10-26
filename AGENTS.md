@@ -39,3 +39,10 @@ and the SD card layout.
 - The screen is in normal landscape (`ROTATION = 1`), touch buttons below it. They're
   read in raw panel coordinates, so turning the screen upside down (`ROTATION = 3`)
   swaps the left and right ones.
+
+## Screenshots
+
+`screenshot.py` reads the screen back over USB (`SHOT`) and can open screens and load
+albums for it (`SHOW`, `LOAD`). After a visible UI change, refresh the README's set with
+`~/.venvs/esp/bin/python screenshot.py --tour docs/screenshots --music "<album>"` (a
+device on the new firmware must be plugged in).

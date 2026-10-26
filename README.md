@@ -1,45 +1,93 @@
 # Tiny Tunes
 
-A kids' audio player for the [M5Stack Core2](https://docs.m5stack.com/en/core/core2)
-(ESP32, 320×240 touchscreen, speaker, battery, microSD): music, podcasts and audiobooks.
-Built for a 5- and a 7-year-old: big picture buttons, no internet browsing, everything
-chosen by a grown-up.
+A kids' audio player for the [M5Stack Core2](https://docs.m5stack.com/en/core/core2): music,
+audiobooks and podcasts from a microSD card, played on the speaker or Bluetooth headphones.
+Built for a 5- and a 7-year-old: big pictures, few words, no browsing the internet, and
+everything on it chosen by a grown-up.
 
-The middle touch button below the screen is **Home**. Every screen has the same top bar:
-pictures only: a round back button (on the song list and the player), and top right a
-button that's green while music plays and opens the player.
-Home is the shelves (Podcasts, Music, Books)
-as a list of wide cards; then albums as a carousel of square covers that goes round and
-round; then the songs.
-The player keeps it simple: the album, the title, one big play button (swipe for the next
-or previous song), a progress bar, and quieter / louder buttons either side of play (5 steps).
-Books and podcasts resume where they stopped.
-Snackbars at the bottom say when the battery is low, it's charging, or headphones connect.
+| Home | Albums | Songs | Player |
+|---|---|---|---|
+| ![Home: Podcasts, Music and Books](docs/screenshots/home.png) | ![Albums: a carousel of covers](docs/screenshots/albums.png) | ![Songs: the album's cover and its songs](docs/screenshots/songs.png) | ![The player](docs/screenshots/player.png) |
 
-A quick tap on the power button turns the screen off (the music keeps playing) and on
-again; holding it for a second switches Tiny Tunes off.
+## Using it
 
-Holding two of the touch buttons together for 3 seconds opens the grown-ups screen
-(loudest volume, brightness, auto-off, Bluetooth pairing, WiFi, and stats).
+- **Home** (the middle touch button below the screen) shows the shelves: Podcasts, Music
+  and Books. Podcasts says how many episodes are new.
+- **Albums** are a carousel of covers: swipe left and right, round and round. The ones
+  played most recently come first. Tap the middle one to open it.
+- **Songs** play when tapped; the list stays put. Tap the song that's playing for the
+  player.
+- **Books** skip the list and open the player where the story left off. Its bar covers the
+  whole book, with a tick between chapters.
+- **The player** has quieter / previous / play / next / louder, and a bar to drag. Swipe
+  for the next or previous track.
+- **The top bar** has back on the left and, on the right, the now-playing button: its bars
+  bounce on green while something plays; tap it for the player.
+- **Snackbars** at the bottom say when the battery is low, it's charging, or headphones
+  connect.
+- **The power button:** a tap turns the screen off and on (the sound keeps playing);
+  holding it for a second switches Tiny Tunes off.
 
-## Two firmware modes
+## For grown-ups
 
-The precompiled ESP32 Arduino core can't fit Bluetooth audio and WiFi in IRAM at
-the same time, so the sketch builds twice and both copies live in the two app slots:
+Hold two of the touch buttons below the screen for 3 seconds for the grown-ups screen:
+the loudest the volume goes, brightness, auto-off, Bluetooth pairing, switching to WiFi
+mode, and stats.
 
-- **Bluetooth mode** (default): plays to paired headphones/speakers, or the speaker.
-- **WiFi mode** (`-DCORE2_WIFI=1`): clock sync, a web page for adding and organizing
-  music, podcast downloads.
+**Bluetooth and WiFi.** The ESP32 can't fit Bluetooth audio and WiFi at once, so Tiny Tunes
+is two firmwares in the two app slots, and switching between them reboots (a couple of
+seconds; the card and settings are shared):
 
-Switching (grown-ups screen, or `upload.py --mode`) reboots into the other slot in a
-couple of seconds. The SD card and settings are shared. The Bluetooth build is within
-a few hundred bytes of its IRAM limit: libc time/ctype helpers, `rand()`, M5Unified's
-`powerOff()` and its Mic class all cost IRAM, which is why the code avoids them.
+- **Bluetooth mode** (normal): plays to paired headphones or speakers, or the speaker.
+- **WiFi mode:** a web page for adding and organizing music, books and podcasts; podcast
+  downloads; the clock set from the internet.
 
-## Setup
+Every night between midnight and 5 am, if it's plugged in and nobody is using it, it
+switches to WiFi by itself, downloads new podcast episodes, and switches back.
 
-Requires [arduino-cli](https://arduino.github.io/arduino-cli/), the Espressif ESP32 core
-(tested with 3.3.12) and these libraries:
+**A name.** `upload.py --name Ava` (or the web page's Settings) puts "Hi, Ava!" on the
+splash screen and makes the web page `http://ava-tunes.local` in WiFi mode.
+
+## Adding music, books and podcasts
+
+The card is FAT32. Each top-level folder is a shelf, and each folder in it is an album:
+
+```
+/music/Fleetwood Mac - Rumours/01 Dreams.mp3
+/music/Fleetwood Mac - Rumours/cover.jpg              (optional)
+/books/The Wonderful Wizard of Oz/01 The Cyclone.mp3
+/podcasts/Circle Round/2026-10-21 The Clever Fox.mp3  (managed by the podcast sync)
+```
+
+Names come from the songs' ID3 tags (title, artist, album, track and disc numbers) where
+they have them, and from the file and folder names otherwise. Covers come from a
+`cover.jpg` / `.png` in the folder, or from the picture inside the songs. Books and podcasts
+remember where they were.
+
+Three ways to add things:
+
+- **Card reader:** copy the folders over. Changes show up the next time it's switched on.
+- **The web page** (WiFi mode): drag in MP3s and a cover; rename, move and delete; Clean
+  up tidies names and makes missing covers; add podcast feeds (RSS or Apple Podcasts
+  links) and choose how many episodes to keep.
+- **`upload.py`** over USB (or WiFi when the device is in WiFi mode):
+
+```sh
+PY=~/.venvs/esp/bin/python
+$PY upload.py "~/Music/Some Artist - Some Album"           # an album folder
+$PY upload.py --shelf books "~/Audiobooks/Charlotte's Web"   # a book
+$PY upload.py --ls                                         # what's on the card
+$PY upload.py --wifi MyNetwork                             # WiFi setup (asks for the password)
+$PY upload.py --mode wifi                                  # switch to WiFi (or bt) mode
+$PY upload.py --name Ava                                   # whose Tiny Tunes it is
+```
+
+Each run of `upload.py` also sets the device's clock from the computer.
+
+## Building and flashing
+
+Needs [arduino-cli](https://arduino.github.io/arduino-cli/), the Espressif ESP32 core
+(tested with 3.3.12), these libraries, and a Python venv for the tools:
 
 ```sh
 arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
@@ -49,53 +97,22 @@ git clone https://github.com/pschatzmann/ESP32-A2DP ~/Documents/Arduino/librarie
 python3 -m venv ~/.venvs/esp && ~/.venvs/esp/bin/pip install esptool pyserial
 ```
 
-## Build and flash
-
 ```sh
-./flash.sh            # builds both modes, flashes Bluetooth to app0 and WiFi to app1
-./flash.sh --no-build # flash the last build
+./flash.sh                     # build both firmwares and flash them to the Core2 on USB
+./flash.sh /dev/cu.usbserial-X # a particular one, when two are plugged in
+./flash.sh --no-build          # flash the last build again
 ```
 
-The Core2's USB-serial chip is unreliable at 921600 baud, so flashing and the serial
-link use 460800.
-
-## Music on the SD card
-
-FAT32 microSD. Albums are folders, at the card root or inside `/music`:
-
-```
-/music/Fleetwood Mac - Rumours/01 Dreams.mp3
-/music/Fleetwood Mac - Rumours/cover.jpg       (or .png; optional)
-/podcasts/<Show>/2025-10-21 Episode title.mp3  (managed by the podcast sync)
-```
-
-Song titles are cleaned for display (track numbers, "Artist -" prefixes and
-"(Remastered)"-style tags are dropped). Covers are decoded once and cached next to
-them as `.cover.rgb565`.
-
-Ways to add music:
-
-- **Card reader:** copy folders, then `upload.py --prepare /Volumes/<card>` makes small covers.
-- **WiFi mode web page** (`http://<device-ip>`): drag in MP3s and a cover, organize,
-  rename, delete, run Clean up, and manage podcast feeds.
-- **`upload.py`** (USB, or WiFi when the device is in WiFi mode):
-
-```sh
-PY=~/.venvs/esp/bin/python
-$PY upload.py "~/Music/Some Artist - Some Album"   # upload an album folder
-$PY upload.py --ls                                 # list the card
-$PY upload.py --wifi MyNetwork                     # save WiFi credentials (prompts for the password)
-$PY upload.py --mode wifi                          # reboot into WiFi (or bt) mode
-$PY upload.py --name Ava                           # name the owner: "Hi, Ava!", ava-tunes.local
-```
-
-Every `upload.py` run also sets the device clock from the computer.
+The version (grown-ups → Stats, and the web page's footer) is `VERSION` plus the build
+number and commit, e.g. `0.9.3+32.08831bd`.
 
 ## Files
 
-- `tiny-tunes.ino`: the whole firmware (both modes, `#if CORE2_WIFI`), including the
-  web page and the USB serial protocol, which is documented above `handleSerial()`.
-- `upload.py`: host tool for uploads, WiFi setup, mode switching and card prep.
-- `flash.sh`: builds both modes and flashes them.
+- `tiny-tunes.ino`: the whole firmware, both modes (`#if CORE2_WIFI`), including the web
+  page and the USB serial protocol (documented above `handleSerial()`).
+- `upload.py`: uploads, WiFi setup, mode switching, naming.
+- `screenshot.py`: screenshots from the device's display (`--tour docs/screenshots` makes
+  the ones above).
+- `flash.sh`: builds both firmwares and flashes them.
 - `CHANGELOG.md`: what changed in each version.
 - `AGENTS.md`: working notes and constraints for AI coding agents.

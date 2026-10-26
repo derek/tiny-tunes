@@ -30,13 +30,18 @@ def find_port():
     return ports[0]
 
 
-def wait_ready(s, timeout=40):
+def wait_ready(s, timeout=60):
+    """Opening the port usually restarts the Core2; either way, wait until it answers."""
     end = time.time() + timeout
     while time.time() < end:
-        line = s.readline().decode(errors="replace").strip()
-        if line.startswith("READY"):
-            return line
-    sys.exit("The Core2 didn't finish booting.")
+        s.reset_input_buffer()
+        s.write(b"PING\n")
+        line_end = time.time() + 2
+        while time.time() < line_end:
+            line = s.readline().decode(errors="replace").strip()
+            if line.startswith("PONG") or line.startswith("READY"):
+                return line
+    sys.exit("The Core2 didn't answer. Is Tiny Tunes running?")
 
 
 def command(s, line, timeout=10):
