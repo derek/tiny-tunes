@@ -6,6 +6,11 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.9 — 2026-10-26
+
+### Changed
+- The album carousel shows just the album's name, not the artist.
+
 ## 0.9.8 — 2026-10-26
 
 ### Fixed

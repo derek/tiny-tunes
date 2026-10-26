@@ -3014,8 +3014,8 @@ static void watchPower() {
 }
 
 // ----- albums -----
-// A carousel: one big square cover in the middle with the album's name across the screen
-// below it, and the albums either side peeking in, dimmed. Swipe for the next / previous
+// A carousel: one big square cover in the middle with the album's name (just the name)
+// across the screen below it, and the albums either side peeking in, dimmed. Swipe for the next / previous
 // (it goes round and round with three or more), tap a side cover to turn to it, tap the
 // middle to open it. The ones played most recently come first, then the rest A to Z.
 // The playing album gets a ring and a badge, podcasts with new episodes a dot.
@@ -3070,19 +3070,13 @@ static void drawCarousel() {
     iconPlaying(CV_X + CV_BIG - 16, CV_Y + CV_BIG - 16, C_WHITE);
   }
   if (albums[a].newCount > 0) d.fillCircle(CV_X + 14, CV_Y + 14, 7, C_YELLOW);  // new podcast episodes
-  // the name across the screen (one size, two lines at most), the artist under it
+  // the name across the screen (one size, two lines at most)
   d.setFont(&fonts::FreeSansBold12pt7b);
   auto lines = wrapText(albums[a].name, 296, 2);
   d.setTextDatum(middle_center);
   d.setTextColor(C_WHITE);
   int y = lines.size() > 1 ? CV_NAME_Y - 5 : CV_NAME_Y;
   for (auto& l : lines) { d.drawString(l, 160, y); y += 23; }
-  const String& who = albums[a].albumArtist;
-  if (who.length() && who != albums[a].name) {
-    d.setFont(&fonts::FreeSansBold9pt7b);
-    d.setTextColor(C_DIM);
-    d.drawString(fitLine(who, 296), 160, y - 2);
-  }
 }
 
 static void drawAlbums() {
