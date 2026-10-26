@@ -6,6 +6,11 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+### Added
+- `tags.py`: fix song tags with a spreadsheet. `export` writes every song's title,
+  artist, album, album artist, track and disc to a CSV; `apply` shows what would change
+  and writes the edits back into the MP3s (keeping their ID3 version and cover art).
+
 ## 0.9.9 — 2026-10-26
 
 ### Changed

@@ -84,6 +84,17 @@ $PY upload.py --name Ava                                   # whose Tiny Tunes it
 
 Each run of `upload.py` also sets the device's clock from the computer.
 
+**Fixing names.** If songs show the wrong title, artist or album, fix their tags with a
+spreadsheet (the card in the Mac):
+
+```sh
+$PY tags.py export "/Volumes/NO NAME" tags.csv   # every song's tags, one row each
+# edit tags.csv in Numbers or Excel
+$PY tags.py apply "/Volumes/NO NAME" tags.csv    # shows what would change, then asks
+```
+
+(`~/.venvs/esp/bin/pip install mutagen` once first.)
+
 ## Building and flashing
 
 Needs [arduino-cli](https://arduino.github.io/arduino-cli/), the Espressif ESP32 core
@@ -94,7 +105,7 @@ arduino-cli config add board_manager.additional_urls https://espressif.github.io
 arduino-cli core install esp32:esp32
 arduino-cli lib install M5Unified ESP8266Audio
 git clone https://github.com/pschatzmann/ESP32-A2DP ~/Documents/Arduino/libraries/ESP32-A2DP
-python3 -m venv ~/.venvs/esp && ~/.venvs/esp/bin/pip install esptool pyserial
+python3 -m venv ~/.venvs/esp && ~/.venvs/esp/bin/pip install esptool pyserial mutagen
 ```
 
 ```sh
@@ -111,6 +122,7 @@ number and commit, e.g. `0.9.3+32.08831bd`.
 - `tiny-tunes.ino`: the whole firmware, both modes (`#if CORE2_WIFI`), including the web
   page and the USB serial protocol (documented above `handleSerial()`).
 - `upload.py`: uploads, WiFi setup, mode switching, naming.
+- `tags.py`: export song tags to a spreadsheet and write the edits back.
 - `screenshot.py`: screenshots from the device's display (`--tour docs/screenshots` makes
   the ones above).
 - `flash.sh`: builds both firmwares and flashes them.
