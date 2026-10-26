@@ -6,6 +6,8 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.12.1 — 2026-10-26
+
 ### Changed
 - The five volume steps are even in loudness, and step 1 is quiet but always audible
   (before, it was 28 dB down or more: near silent on the speaker). Step 1 is 18 dB under
