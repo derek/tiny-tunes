@@ -1522,15 +1522,30 @@ static void loadRecent() {
   if (f) f.close();
 }
 
-static void noteRecent(const String& path) {
-  if (!recentAlbums.empty() && recentAlbums[0] == path) return;  // already first: nothing to write
+static bool recentUnsaved = false;  // moved in memory, not written yet
+
+// Moves the album to the front, to be written later (opening an album: no card write
+// while the music plays, which could make it skip).
+static void noteRecentLater(const String& path) {
+  if (!recentAlbums.empty() && recentAlbums[0] == path) return;
   recentAlbums.erase(std::remove(recentAlbums.begin(), recentAlbums.end(), path), recentAlbums.end());
   recentAlbums.insert(recentAlbums.begin(), path);
   if (recentAlbums.size() > RECENT_MAX) recentAlbums.resize(RECENT_MAX);
+  recentUnsaved = true;
+}
+
+static void saveRecent() {
+  recentUnsaved = false;
   File f = SD.open(RECENT_FILE, FILE_WRITE);
   if (!f) return;
   for (auto& p : recentAlbums) f.println(p);
   f.close();
+}
+
+// Playing an album: to the front and written now (a new song is starting anyway).
+static void noteRecent(const String& path) {
+  noteRecentLater(path);
+  if (recentUnsaved) saveRecent();
 }
 
 static int recentRank(const String& path) {
@@ -1894,6 +1909,7 @@ static void setVolLevel(int lvl) {
 // ---------- mode switching ----------
 // Reboots into the firmware in the other app slot, carrying volume and track over.
 static void switchMode(bool quiet) {
+  if (recentUnsaved) saveRecent();
   const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
   if (!next || esp_ota_set_boot_partition(next) != ESP_OK) {
     Serial.println("ERR other mode not installed");
@@ -2780,8 +2796,9 @@ static void serviceSnack() {
 
 // Battery and charger news for the snackbar, checked every few seconds (and kept for
 // Home's battery mark).
-static int batPct = -1;       // -1: not read yet
+static int batPct = -1;       // -1: not read yet; smoothed (the gauge jumps a few % with the music)
 static bool batUsb = false;   // plugged in
+static bool batLow = false;   // under 20% (back over 23% to clear: no flicker at the line)
 static void watchPower() {
   static uint32_t last = 0;
   static bool first = true, wasUsb = true, fullShown = false;
@@ -2790,8 +2807,10 @@ static void watchPower() {
   last = millis();
   int pct = M5.Power.getBatteryLevel();
   bool usb = usbPower();
-  batPct = pct;
+  batPct = batPct < 0 || usb != batUsb ? pct : (batPct * 3 + pct + 2) / 4;
   batUsb = usb;
+  if (batPct < 20) batLow = true;
+  else if (batPct >= 23) batLow = false;
   if (first) { first = false; wasUsb = usb; fullShown = usb && pct >= 100; }
   if (usb) {
     warned = 101;
@@ -2926,9 +2945,9 @@ static bool navHasBack() { return screen != Screen::Shelves; }
 // After the house: whose it is ("Ellie"), the time in the middle (when the clock has
 // been set), and on the right headphones while they're connected (WiFi mode: a WiFi
 // mark) and the battery: white, red under 20%, green with a bolt while charging.
-static void iconBatteryBig(int x, int y, int pct, bool charging, uint16_t bg) {  // top-left; 32 x 16
+static void iconBatteryBig(int x, int y, int pct, bool charging, bool low, uint16_t bg) {  // top-left; 32 x 16
   auto& d = M5.Display;
-  uint16_t c = !charging && pct < 20 ? rgb(240, 80, 110) : C_WHITE;
+  uint16_t c = !charging && low ? rgb(240, 80, 110) : C_WHITE;
   d.fillRoundRect(x, y, 29, 16, 4, c);
   d.fillRoundRect(x + 2, y + 2, 25, 12, 3, bg);
   d.fillRoundRect(x + 29, y + 5, 3, 6, 1, c);
@@ -2963,7 +2982,8 @@ static uint32_t homeStatusKey() {  // changes when anything in the bar would
 #else
   bool link = btConnected;
 #endif
-  return ((clock ? h * 60 + m + 1 : 0) << 12) ^ ((batPct + 1) << 3) ^ (batUsb << 1) ^ link;
+  int fill = batPct < 0 ? 0 : 1 + 21 * constrain(batPct, 0, 100) / 100;  // the icon's fill in pixels: redraw when that moves
+  return ((clock ? h * 60 + m + 1 : 0) << 12) ^ (fill << 4) ^ (batLow << 3) ^ (batUsb << 1) ^ link;
 }
 static uint32_t homeStatusShown = 0;
 
@@ -2986,7 +3006,7 @@ static void drawHomeStatus(uint16_t bar) {
     d.drawString(fitLine(owner, room), nx, NAV_CY + 1);
   }
   int bx = 312 - 32;
-  if (batPct >= 0) iconBatteryBig(bx, NAV_CY - 8, batPct, batUsb, bar);
+  if (batPct >= 0) iconBatteryBig(bx, NAV_CY - 8, batPct, batUsb, batLow, bar);
   if (statusLink()) {
 #if CORE2_WIFI
     iconWifi(bx - 16, NAV_CY - 1, webUp ? C_WHITE : C_DIM);
@@ -3162,7 +3182,7 @@ static void drawKeepListening() {
   bool on = musicIsPlaying();
   drawCardFrame(KL_X, KL_Y, KL_W, KL_H, C_KL);
   drawAlbumArt(playAlbum, KL_X + 4, KL_Y + 4, CV_HEAD);
-  int tx = KL_X + CV_HEAD + 16, tw = KL_BX - KL_BR - 3 - tx;
+  int tx = KL_X + CV_HEAD + 16, tw = KL_BX - KL_BR - 10 - tx;
   d.setTextDatum(middle_left);
   d.setFont(&fonts::FreeSansBold9pt7b);
   d.setTextColor(on ? C_GREEN : C_DIM);
@@ -3277,7 +3297,7 @@ static std::vector<ResumeEntry> viewResume;  // books/podcasts: progress shown i
 static std::vector<int32_t> viewSizes;        // ...and each file's size, looked up once (-1: not yet)
 
 static void openTracks(int a) {
-  noteRecent(albums[a].path);  // the shelf's carousel opens on it next time
+  noteRecentLater(albums[a].path);  // the shelf's carousel opens on it next time (saved when it's quiet)
   viewAlbum = a;
   viewTracks = (a == playAlbum) ? tracks : listTracks(a);
   if (isResumable(a)) saveResumePos(false);  // so the playing track's bar is current
@@ -3975,6 +3995,7 @@ static void drawHoldProgress(uint32_t heldMs) {
 // (Held 4 s, the power chip cuts the power by itself.)
 static void powerDown() {
   stopPlayback();  // books/podcasts: remembers the spot
+  if (recentUnsaved) saveRecent();
   auto& d = M5.Display;
   d.wakeup();
   applyBrightness();
@@ -4533,6 +4554,7 @@ void loop() {
   }
   tickKeepTitle(now);  // Home: Keep listening's long title scrolls
   tickHomeStatus(now);  // Home: the clock, battery and headphones in the top bar
+  if (recentUnsaved && !musicIsPlaying()) saveRecent();  // an album opened while it played
   if (litControl >= 0 && (int32_t)(now - litUntil) >= 0) {
     if (screen == Screen::Player && !dimmed) drawControl(litControl, false);
     litControl = -1;

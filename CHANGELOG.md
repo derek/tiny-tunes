@@ -6,6 +6,15 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.11.0 — 2026-10-26
+
+### Fixed
+- Home's battery mark no longer flickers: the reading is smoothed, and it turns red
+  under 20% and only goes back to white over 23%.
+- Opening an album no longer writes to the card while music plays (it could make it
+  skip); the carousel's "last opened" is saved once it's quiet, or at power-off.
+- Keep listening's title keeps clear of the play button.
+
 ### Changed
 - Home's shelves sit side by side under the Keep listening card: a square-ish card each
   with its picture over its name, and new podcast episodes as a yellow number in the
