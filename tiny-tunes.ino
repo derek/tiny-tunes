@@ -3168,6 +3168,7 @@ static void drawKeepListening() {
   d.setTextColor(on ? C_GREEN : C_DIM);
   d.drawString(on ? "Now playing" : "Keep listening", tx, KL_Y + 21);
   String title = isBook(playAlbum) ? albums[playAlbum].name : trackTitle(tracks[current], playAlbum);
+  tx -= 1; tw += 1;  // the bigger font's letters sit a pixel further in: line it up with the label
   if (title != klTitle || tx != klX || tw != klW) {  // a new title starts from the beginning
     klTitle = title; klX = tx; klW = tw; klOff = 0;
     klHoldUntil = millis() + KL_HOLD_MS;
