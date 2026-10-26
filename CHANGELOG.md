@@ -6,6 +6,16 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.9.8 — 2026-10-26
+
+### Fixed
+- An album folder with two covers of the same kind (cover.png and cover.jpg) uses the
+  more recently changed one, not whichever the card lists first.
+
+### Added
+- A `COVERS` serial command: each album's cover in use, and every picture in its folder
+  with its size in pixels and its date (for finding covers that aren't square).
+
 ## 0.9.7 — 2026-10-26
 
 ### Changed

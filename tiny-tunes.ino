@@ -1423,7 +1423,8 @@ static String prettyAlbumName(String n) {
 
 static void clearCoverCache();
 
-// Cover image preference: cover.* > folder.* > front.* > album.* > any other JPG/PNG.
+// Cover image preference: cover.* > folder.* > front.* > album.* > any other JPG/PNG;
+// between two of the same kind (cover.png and cover.jpg), the more recently changed.
 static int coverRank_(const char* n) {
   if (n[0] == '.') return 99;
   const char* dot = strrchr(n, '.');
@@ -1440,6 +1441,7 @@ static int coverRank_(const char* n) {
 static bool scanFolder(const String& dirPath, std::vector<String>* subdirs, String& cover) {
   bool hasMp3 = false;
   int coverRank = 99;
+  time_t coverTime = 0;
   cover = "";
   File dir = SD.open(dirPath);
   if (!dir || !dir.isDirectory()) return false;
@@ -1447,7 +1449,11 @@ static bool scanFolder(const String& dirPath, std::vector<String>* subdirs, Stri
     const char* n = f.name();
     if (f.isDirectory()) { if (subdirs && !isHidden(n)) subdirs->push_back(n); }
     else if (isMp3(n)) hasMp3 = true;
-    else if (int r = coverRank_(n); r < coverRank) { coverRank = r; cover = n; }
+    else if (int r = coverRank_(n); r < 99 && (r < coverRank || (r == coverRank && f.getLastWrite() > coverTime))) {
+      coverRank = r;
+      coverTime = f.getLastWrite();
+      cover = n;
+    }
     f.close();
   }
   dir.close();
@@ -4072,6 +4078,8 @@ static void handleIdle() {
 //   SHOW <screen>        -> home | albums [<shelf>] | songs | player | grownups, "OK"
 //   SHOT                 -> "SHOT 320 240", the screen as raw RGB565 rows, then "END"
 //                           (LOAD, SHOW and SHOT are for screenshot.py)
+//   COVERS               -> per album "C <folder>\t<cover in use>", then one
+//                           "I <image>\t<bytes>\t<w>x<h>\t<modified>" per picture in it; "END"
 // The WiFi build prints "IP <addr>" when it joins the network.
 static constexpr size_t UP_CHUNK = 2048;
 
@@ -4237,6 +4245,30 @@ static void handleSerial() {
     else if (what == "grownups") { guTab = 0; beforeGrownups = screen; showScreen(Screen::Grownups); }
     else { Serial.println("ERR bad screen"); return; }
     Serial.println("OK");
+  } else if (line == "COVERS") {  // which picture each album uses, and how big they all are
+    for (auto& al : albums) {
+      Serial.printf("C %s\t%s\n", al.path.c_str(), al.coverFile.length() ? al.coverFile.c_str() : al.artFile.length() ? "(in the songs' tags)" : "(none)");
+      File dir = SD.open(al.path);
+      while (dir && dir.isDirectory()) {
+        File f = dir.openNextFile();
+        if (!f) break;
+        String n = f.name();
+        String lower = lowerStr(n);
+        time_t mt = f.getLastWrite();
+        uint32_t size = f.size();
+        f.close();
+        if (n[0] == '.' || !(lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png"))) continue;
+        int w = 0, h = 0;
+        String path = joinPath(al.path, n.c_str());
+        bool ok = lower.endsWith(".png") ? pngSize(path, w, h) : jpegSize(path, w, h);
+        tm t;
+        gmtime_r(&mt, &t);
+        Serial.printf("I %s\t%u\t%dx%d%s\t%04d-%02d-%02d %02d:%02d\n", n.c_str(), (unsigned)size, w, h, ok ? "" : " (can't read)",
+                      t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min);
+      }
+      if (dir) dir.close();
+    }
+    Serial.println("END");
   } else if (line == "SHOT") {  // what's on the screen, read back from the display
     static uint16_t row[320];
     Serial.println("SHOT 320 240");
