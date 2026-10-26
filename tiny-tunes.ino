@@ -2649,23 +2649,13 @@ static void drawPlayerInfo() {
   bool art = hasCover(albums[playAlbum]) && getCover(playAlbum, P_COVER);
   if (art) drawAlbumArt(playAlbum, P_COVER_X, P_COVER_Y, P_COVER);
   int tx = art ? P_COVER_X + P_COVER + 12 : P_COVER_X, tw = 312 - tx;
-  bool book = isBook(playAlbum), podcast = isPodcastAlbum(playAlbum);
-  String big = book ? albums[playAlbum].name : title;
-  String second = artist;
-  String third = book ? title : podcast ? String() : albums[playAlbum].name;
-  if (third == big || third == second) third = "";
+  String big = isBook(playAlbum) ? albums[playAlbum].name : title;  // just the title (a book's own name): calm
   d.setFont(&fonts::FreeSansBold12pt7b);
   auto lines = wrapText(big, tw, 2);
-  int y = P_COVER_Y + 10;
+  int y = P_COVER_Y + P_COVER / 2 - ((int)lines.size() - 1) * 23 / 2;  // centered by the cover
   d.setTextDatum(middle_left);
   d.setTextColor(C_WHITE);
   for (auto& l : lines) { d.drawString(l, tx, y); y += 23; }
-  d.setFont(&fonts::FreeSansBold9pt7b);
-  if (second.length()) { d.setTextColor(C_DIM); d.drawString(fitLine(second, tw), tx, y - 2); y += 19; }
-  if (third.length()) {
-    d.setTextColor(book ? rgb(226, 210, 250) : rgb(200, 205, 230));
-    d.drawString(fitLine(third, tw), tx, y - 2);
-  }
   drawTimeLeft(true);
 }
 
@@ -2962,8 +2952,10 @@ static void drawNowPlayingButton(bool bounce = false) {  // bounce: new random b
 // now-playing button.
 static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's songs, 3 the player
   auto& d = M5.Display;
-  uint16_t bar = C_BAR;
-  if (level == 1 && viewShelf >= 0 && viewShelf < (int)shelves.size()) bar = shelfColor(shelves[viewShelf]);  // the shelf's own color, as on Home
+  int shelf = level == 0 ? -1 : level == 1 ? viewShelf : level == 2 ? (viewAlbum >= 0 ? albums[viewAlbum].shelf : -1)
+                                                                   : (playAlbum >= 0 ? albums[playAlbum].shelf : -1);
+  bool known = shelf >= 0 && shelf < (int)shelves.size();
+  uint16_t bar = known ? shelfColor(shelves[shelf]) : C_BAR;  // the shelf's own color, as on Home
   navBarColor = bar;
   d.fillRect(0, 0, 320, NAV_H, bar);
   if (level == 0) {
@@ -2971,9 +2963,7 @@ static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's
   } else {
     drawRound(NB_X, NAV_CY - 1, NB_R, bar == C_BAR ? C_OFF : mix565(bar, C_SHADE, 1, 3));  // on a colored bar: a darker shade of it
     iconArrow(NB_X - 1, NAV_CY - 1, 0, C_WHITE);
-    int shelf = level == 1 ? viewShelf : level == 2 ? (viewAlbum >= 0 ? albums[viewAlbum].shelf : -1)
-                                                    : (playAlbum >= 0 ? albums[playAlbum].shelf : -1);
-    if (shelf >= 0 && shelf < (int)shelves.size()) {
+    if (known) {
       d.setFont(&fonts::FreeSansBold12pt7b);
       d.setTextDatum(middle_left);
       d.setTextColor(C_WHITE);

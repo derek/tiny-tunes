@@ -26,8 +26,8 @@ everything on it chosen by a grown-up.
 - **The top bar** has back on the left, the shelf's name, and on the right the
   now-playing button: its bars bounce on green while something plays; tap it for the
   player. Home doesn't have it (Keep listening does that job): leaving Home for a shelf,
-  Keep listening's green button flies up into the corner and becomes it. On
-  a shelf's albums the bar is in the shelf's color.
+  Keep listening's green button flies up into the corner and becomes it. Past
+  Home the bar is in the shelf's color.
 - **Snackbars** at the bottom say when the battery is low, it's charging, or headphones
   connect. When headphones disconnect, the sound pauses rather than carrying on out
   loud.

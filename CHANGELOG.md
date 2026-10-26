@@ -16,8 +16,10 @@ e.g. `0.3.0+6.cb61af8`.
   the top bar's corner and becomes it.
 - Keep listening's round button has the same dancing bars as the now-playing button
   while something plays (a play triangle when paused).
-- The top bar on a shelf's albums is in the shelf's own color, as on Home (Music blue,
-  Pods purple, Books orange).
+- The top bar is in the shelf's own color, as on Home (Music blue, Pods purple, Books
+  orange), on its albums, songs and player.
+- The player shows just the title (a book's name for books), next to the cover: no
+  artist or album line.
 - Keep listening's title scrolls like a marquee when it's too long to fit.
 - The Home button does nothing on Home (it used to repaint the screen).
 
