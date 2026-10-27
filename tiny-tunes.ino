@@ -4241,7 +4241,8 @@ static void handleIdle() {
 //   TIME Y M D h m s w   -> sets the RTC to this local time (w = weekday, 0 = Sunday), "OK"
 //   WIFI <ssid>\t<pass>  -> saves credentials, replies "OK"
 //   MODE <bt|wifi>       -> "OK", rebooting into that mode if not already in it
-//   NAME [<name>]        -> sets (or, empty, clears) the owner's name, "OK"
+//   NAME [<name> | -]    -> alone: "NAME <name>" (the owner's name, empty if none);
+//                           with a name: sets it; "-" clears it; "OK"
 //   LOAD <album>         -> loads the first album whose name contains <album> (paused), "OK"
 //   SHOW <screen>        -> home | albums [<shelf>] | songs | player | grownups, "OK"
 //   THEME [<name>]       -> switches to that color theme (kept, like Settings -> Colors), "OK";
@@ -4465,8 +4466,12 @@ static void handleSerial() {
       Serial.write((const uint8_t*)row, sizeof row);
     }
     Serial.println("END");
-  } else if (line == "NAME" || line.startsWith("NAME ")) {
-    setOwner(line.substring(4));
+  } else if (line == "NAME") {  // just asking: never clears it
+    Serial.printf("NAME %s\n", owner.c_str());
+  } else if (line.startsWith("NAME ")) {
+    String name = line.substring(5);
+    name.trim();
+    setOwner(name == "-" ? String() : name);
     Serial.println("OK");
   } else if (line.startsWith("WIFI ")) {
     int tab = line.indexOf('\t');

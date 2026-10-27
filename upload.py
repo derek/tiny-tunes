@@ -305,7 +305,7 @@ def main():
             print("No connection after 45 s. Check the password, and that the network is 2.4 GHz.")
         return
     if args.name is not None:
-        command(s, f"NAME {args.name.strip()}".rstrip())
+        command(s, f"NAME {args.name.strip() or '-'}")  # "-" clears it
         print(f"Named it {args.name.strip()}'s Tiny Tunes." if args.name.strip() else "Cleared the owner's name.")
         return
     if args.mode:

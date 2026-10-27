@@ -6,6 +6,12 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.13.1 — 2026-10-26
+
+### Fixed
+- The `NAME` serial command on its own reports the owner's name instead of clearing
+  it (`NAME -` clears it now; `upload.py --name ""` sends that).
+
 ## 0.13.0 — 2026-10-26
 
 ### Added
