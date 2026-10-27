@@ -6,6 +6,16 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+### Added
+- Two light color themes: Candy (pastels on lavender, dark words, pink play button)
+  and Daylight (warm paper background, dark words, bright shelves with white words).
+- A `THEME [<name>]` serial command: lists the themes, or switches to one (for
+  screenshots).
+
+### Changed
+- The play triangle sits better in its circle (it was a few pixels right of center).
+- The grown-ups settings choices are a little wider, so "Normal" fits its pill.
+
 ## 0.12.1 — 2026-10-26
 
 ### Changed

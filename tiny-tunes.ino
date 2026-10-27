@@ -66,24 +66,31 @@ enum class Screen { Player, Shelves, Albums, Tracks, Grownups };
 enum class Snack : uint8_t { None, LowBattery, Charging, Full, Headphones, Speaker };  // see "snackbars"
 
 // ---------- colors ----------
-// Themes, picked on the grown-ups screen (Settings -> Colors) and kept in prefs. All
-// dark (the screen is mostly used in the evening); 0xRRGGBB.
+// Themes, picked on the grown-ups screen (Settings -> Colors) and kept in prefs;
+// 0xRRGGBB. Candy and Daylight are light: dark words and marks (ink) on the background
+// (Candy's pastel shelves get dark words too; Daylight's bright ones white).
 struct Theme {
   const char* name;
+  uint32_t ink;  // words and marks on the background, cards and bars
   uint32_t bg, bar, card, row, off, dim, music, accent, accentInk, pods, books, level, badge, panel,
       offDash, dimInk, litCtrl, litVol, litPlay, snackBg, snackText, modeBtn, other;
+  uint32_t shelfInk;  // words and marks on a shelf's color (Home's cards, the top bar past Home)
 };
 static const Theme THEMES[] = {
-    {"Forest", 0x14261E, 0x0D1B15, 0x20392D, 0x244032, 0x2C4A3B, 0x8FB5A0, 0x34A39B, 0xF2C14E, 0x14261E, 0xC9606E, 0xE0A33A,
-     0xF2C14E, 0xF4EFE3, 0x1E362A, 0x3C604E, 0x96B4A5, 0x6ECDC3, 0x466E5A, 0xFADA8C, 0x123A38, 0xCDDED4, 0x345646, 0x788C46},
-    {"Navy", 0x121630, 0x0E1128, 0x1E244E, 0x282E50, 0x32385C, 0x7882AA, 0x1996DC, 0x2EC478, 0xFFFFFF, 0x8A50EC, 0xFF924C,
-     0xFFD200, 0xFFD200, 0x1C2142, 0x4A5180, 0x969CBE, 0x6EC3F5, 0x646CA0, 0x78E6AA, 0x102846, 0xC8CDE6, 0x3C426E, 0x00AAAA},
-    {"Ocean", 0x0B2A33, 0x071E25, 0x123A45, 0x15414D, 0x1A4A56, 0x7FB2BC, 0x1FB5A8, 0xFF8C69, 0xFFFFFF, 0x6C7CFF, 0xF2B84B,
-     0xF2B84B, 0xFF8C69, 0x103641, 0x2A5E6B, 0x96BCC4, 0x70D8CE, 0x2E6270, 0xFFB49C, 0x0E3E48, 0xCFE2E6, 0x245866, 0xC9A0DC},
-    {"Sunset", 0x2A1533, 0x1E0E25, 0x3D2147, 0x42264E, 0x4A2A55, 0xC59AC9, 0xFF9F43, 0xFF7A59, 0xFFFFFF, 0xFF4F8B, 0xE0B020,
-     0xFFD43B, 0xFFFFFF, 0x361C40, 0x5E3A6A, 0xC8A8CC, 0xFFC48A, 0x6A4476, 0xFFAA90, 0x4A2440, 0xE8D4EA, 0x563262, 0x5EC8C8},
-    {"Midnight", 0x000000, 0x000000, 0x161616, 0x1E1E1E, 0x262626, 0x8C8C8C, 0x00B7FF, 0x39E58C, 0x000000, 0xB44BFF, 0xFF8A00,
-     0xF5FF3B, 0xF5FF3B, 0x141414, 0x3A3A3A, 0xA0A0A0, 0x70D8FF, 0x444444, 0x8CF5BE, 0x0A2A3A, 0xD0D0D0, 0x303030, 0x00C8B4},
+    {"Forest", 0xFFFFFF, 0x14261E, 0x0D1B15, 0x20392D, 0x244032, 0x2C4A3B, 0x8FB5A0, 0x34A39B, 0xF2C14E, 0x14261E, 0xC9606E, 0xE0A33A,
+     0xF2C14E, 0xF4EFE3, 0x1E362A, 0x3C604E, 0x96B4A5, 0x6ECDC3, 0x466E5A, 0xFADA8C, 0x123A38, 0xCDDED4, 0x345646, 0x788C46, 0xFFFFFF},
+    {"Navy", 0xFFFFFF, 0x121630, 0x0E1128, 0x1E244E, 0x282E50, 0x32385C, 0x7882AA, 0x1996DC, 0x2EC478, 0xFFFFFF, 0x8A50EC, 0xFF924C,
+     0xFFD200, 0xFFD200, 0x1C2142, 0x4A5180, 0x969CBE, 0x6EC3F5, 0x646CA0, 0x78E6AA, 0x102846, 0xC8CDE6, 0x3C426E, 0x00AAAA, 0xFFFFFF},
+    {"Ocean", 0xFFFFFF, 0x0B2A33, 0x071E25, 0x123A45, 0x15414D, 0x1A4A56, 0x7FB2BC, 0x1FB5A8, 0xFF8C69, 0xFFFFFF, 0x6C7CFF, 0xF2B84B,
+     0xF2B84B, 0xFF8C69, 0x103641, 0x2A5E6B, 0x96BCC4, 0x70D8CE, 0x2E6270, 0xFFB49C, 0x0E3E48, 0xCFE2E6, 0x245866, 0xC9A0DC, 0xFFFFFF},
+    {"Sunset", 0xFFFFFF, 0x2A1533, 0x1E0E25, 0x3D2147, 0x42264E, 0x4A2A55, 0xC59AC9, 0xFF9F43, 0xFF7A59, 0xFFFFFF, 0xFF4F8B, 0xE0B020,
+     0xFFD43B, 0xFFFFFF, 0x361C40, 0x5E3A6A, 0xC8A8CC, 0xFFC48A, 0x6A4476, 0xFFAA90, 0x4A2440, 0xE8D4EA, 0x563262, 0x5EC8C8, 0xFFFFFF},
+    {"Midnight", 0xFFFFFF, 0x000000, 0x000000, 0x161616, 0x1E1E1E, 0x262626, 0x8C8C8C, 0x00B7FF, 0x39E58C, 0x000000, 0xB44BFF, 0xFF8A00,
+     0xF5FF3B, 0xF5FF3B, 0x141414, 0x3A3A3A, 0xA0A0A0, 0x70D8FF, 0x444444, 0x8CF5BE, 0x0A2A3A, 0xD0D0D0, 0x303030, 0x00C8B4, 0xFFFFFF},
+    {"Candy", 0x3B2A5C, 0xF3EAFF, 0xE4D4FF, 0xFFFFFF, 0xFFFFFF, 0xE4D4FF, 0x8A78AE, 0x8FD8F8, 0xFF6FA8, 0xFFFFFF, 0xC3ADFF, 0xFFC98A,
+     0xFF6FA8, 0xFF6FA8, 0xFFFFFF, 0xD6C6F0, 0x9A88BD, 0xBDE9FB, 0xD6C6F0, 0xFF9CC4, 0x6A55A0, 0xE8E0F8, 0xD9C8F5, 0xA8E6CF, 0x3B2A5C},
+    {"Daylight", 0x1E2240, 0xF4F1EA, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xE6E2D9, 0x8A8FA8, 0x2FA3E6, 0x22B573, 0xFFFFFF, 0x9B6BF2, 0xFF9A4D,
+     0x22B573, 0xFFD200, 0xFFFFFF, 0xD8D3C8, 0x8A8FA8, 0x8FD0F2, 0xD8D3C8, 0x7FD9AE, 0x2A4A78, 0xE0E6F0, 0xE6E2D9, 0x3CBFAE, 0xFFFFFF},
 };
 static constexpr int THEME_COUNT = sizeof(THEMES) / sizeof(THEMES[0]);
 static int themeIdx = 0;
@@ -105,7 +112,9 @@ static int themeIdx = 0;
 #define C_YELLOW TH(level)   // the volume steps, progress
 #define C_CREAM  TH(badge)   // new podcast episodes
 #define C_PANEL  TH(panel)
-#define C_WHITE  c565(0xFFFFFF)
+#define C_WHITE  TH(ink)          // words and marks (white, or Candy's dark plum)
+#define C_SHELF_INK TH(shelfInk)  // on a shelf's color
+#define C_PURE   c565(0xFFFFFF)  // white whatever the theme: on snackbars, the playing row, plain covers
 #define C_SHADE  c565(0x000000)
 #define C_GREEN  c565(0x2EC478)  // charging, all good
 struct RoundButton { int x, r; };
@@ -2453,8 +2462,10 @@ static String fitLine(const String& text, int w) {
 
 // ----- icons (all centered on x, y) -----
 static void iconPlay(int x, int y, int s, uint16_t c) {
-  int h = s * 3 / 5;  // optical centering: shift right a little
-  M5.Display.fillTriangle(x - s / 3 + 2, y - h, x - s / 3 + 2, y + h, x + s * 2 / 3 + 2, y, c);
+  // s wide, its box centered a twelfth of s right of x: dead center looks pushed left,
+  // centering its weight looks pushed right
+  int h = s * 3 / 5, left = x - s * 5 / 12, tip = x + s * 7 / 12;
+  M5.Display.fillTriangle(left, y - h, left, y + h, tip, y, c);
 }
 static void iconPause(int x, int y, int s, uint16_t c) {
   M5.Display.fillRoundRect(x - s / 2, y - s / 2, s / 3, s, 3, c);
@@ -2473,13 +2484,13 @@ static void iconSpeaker(int x, int y, uint16_t c) {  // spans x-8 .. x+7
 static void iconBattery(int x, int y, int pct, bool usb) {  // top-left at x, y; 29 x 14
   auto& d = M5.Display;
   uint16_t fill = pct > 50 ? rgb(80, 220, 100) : pct > 20 ? C_YELLOW : rgb(255, 70, 70);
-  d.drawRoundRect(x, y, 26, 14, 3, C_WHITE);
-  d.fillRect(x + 26, y + 4, 3, 6, C_WHITE);
+  d.drawRoundRect(x, y, 26, 14, 3, C_PURE);
+  d.fillRect(x + 26, y + 4, 3, 6, C_PURE);
   d.fillRect(x + 2, y + 2, 22, 10, C_BAR);
   d.fillRect(x + 2, y + 2, std::max(2, 22 * constrain(pct, 0, 100) / 100), 10, fill);
   if (usb) {  // lightning bolt
-    d.fillTriangle(x + 15, y + 1, x + 9, y + 8, x + 14, y + 8, C_WHITE);
-    d.fillTriangle(x + 12, y + 13, x + 18, y + 6, x + 13, y + 6, C_WHITE);
+    d.fillTriangle(x + 15, y + 1, x + 9, y + 8, x + 14, y + 8, C_PURE);
+    d.fillTriangle(x + 12, y + 13, x + 18, y + 6, x + 13, y + 6, C_PURE);
   }
 }
 static void iconHeadphones(int x, int y, uint16_t c) {  // top at y
@@ -2606,7 +2617,7 @@ static void drawAlbumArt(int a, int x, int y, int size, bool dim = false) {
     c = rgb((r + (bg >> 16)) / 2, (g + ((bg >> 8) & 255)) / 2, (b + (bg & 255)) / 2);
   }
   d.fillRoundRect(x, y, size, size, size / 8, c);
-  drawShelfIcon(albumKind(a), x + size / 2, y + size / 2, dim ? TH(dimInk) : C_WHITE, c, size * 100 / 120);
+  drawShelfIcon(albumKind(a), x + size / 2, y + size / 2, dim ? TH(dimInk) : C_PURE, c, size * 100 / 120);
 }
 
 // Something's loaded: the now-playing button has somewhere to go.
@@ -2705,7 +2716,7 @@ static void drawControl(int i, bool lit) {
   bool vol = i == 0 || i == 4;
   drawRound(b.x, P_CTRL_Y, b.r, lit ? (vol ? TH(litVol) : TH(litCtrl)) : (vol ? C_OFF : C_BLUE));
   if (vol) iconSpeakerWaves(b.x, P_CTRL_Y, i == 4 ? 2 : 0, C_WHITE);
-  else iconSkip(b.x, P_CTRL_Y, 22, i == 3, C_WHITE);
+  else iconSkip(b.x, P_CTRL_Y, 22, i == 3, C_SHELF_INK);  // on Music's color
 }
 
 static int litControl = -1;      // lit by a tap, until litUntil
@@ -2833,12 +2844,12 @@ static void drawSnack() {
   d.fillRoundRect(SN_X, SN_Y, SN_W, SN_H, 14, edge);
   d.fillRoundRect(SN_X + 3, SN_Y + 3, SN_W - 6, SN_H - 6, 11, bg);
   int cy = SN_Y + SN_H / 2;
-  if (snackShown == Snack::Headphones) iconHeadphones(SN_X + 26, cy - 8, C_WHITE);
-  else if (snackShown == Snack::Speaker) iconSpeaker(SN_X + 26, cy, C_WHITE);
+  if (snackShown == Snack::Headphones) iconHeadphones(SN_X + 26, cy - 8, C_PURE);
+  else if (snackShown == Snack::Speaker) iconSpeaker(SN_X + 26, cy, C_PURE);
   else iconBattery(SN_X + 12, cy - 7, snackShown == Snack::Full ? 100 : snackPct, snackShown != Snack::LowBattery);
   d.setFont(&fonts::FreeSansBold12pt7b);
   d.setTextDatum(middle_left);
-  d.setTextColor(C_WHITE);
+  d.setTextColor(C_PURE);
   d.drawString(text, SN_X + 52, cy + 1);
   if (detail.length()) {
     int tx = SN_X + 52 + d.textWidth(text) + 10;
@@ -3135,12 +3146,15 @@ static void drawNavBar(int level) {  // 0 Home, 1 a shelf's albums, 2 an album's
     drawHouse(NB_X, NAV_CY, C_WHITE, bar);
     drawHomeStatus(bar);
   } else {
-    drawRound(NB_X, NAV_CY - 1, NB_R, bar == C_BAR ? C_OFF : mix565(bar, C_SHADE, 1, 3));  // on a colored bar: a darker shade of it
-    iconArrow(NB_X - 1, NAV_CY - 1, 0, C_WHITE);
+    // on a shelf's color: a darker shade of it behind back (lighter, for dark ink)
+    bool darkInk = THEMES[themeIdx].shelfInk != 0xFFFFFF;
+    uint16_t ink = known ? C_SHELF_INK : C_WHITE;
+    drawRound(NB_X, NAV_CY - 1, NB_R, !known ? C_OFF : mix565(bar, darkInk ? C_PURE : C_SHADE, 1, 3));
+    iconArrow(NB_X - 1, NAV_CY - 1, 0, ink);
     if (known) {
       d.setFont(&fonts::FreeSansBold9pt7b);
       d.setTextDatum(middle_left);
-      d.setTextColor(C_WHITE);
+      d.setTextColor(ink);
       d.drawString(fitLine(shelves[shelf].name, VB_X - NB_X - NB_R - 24), NB_X + NB_R + 12, NAV_CY + 1);
     }
   }
@@ -3276,13 +3290,13 @@ static void drawShelves() {
     drawCardFrame(x, y, w, h, c);
     int cx = x + w / 2, ny = y + h / 2 + 1;
     if (h >= 90) {  // the picture over the name (two rows of shelves: just names)
-      drawShelfIcon(sh.kind, cx, y + h / 2 - 8, C_WHITE, c, std::min(90, w * 80 / 100));
+      drawShelfIcon(sh.kind, cx, y + h / 2 - 8, C_SHELF_INK, c, std::min(90, w * 80 / 100));
       ny = y + h - 20;
     }
     d.setFont(&fonts::FreeSansBold12pt7b);
     if (d.textWidth(sh.name) > w - 14) d.setFont(&fonts::FreeSansBold9pt7b);
     d.setTextDatum(middle_center);
-    d.setTextColor(C_WHITE);
+    d.setTextColor(C_SHELF_INK);
     d.drawString(fitLine(sh.name, w - 14), cx, ny);
     if (sh.newCount > 0) {  // new podcast episodes: a badge in the corner
       String n = String(sh.newCount);
@@ -3385,7 +3399,7 @@ static void drawProgressMark(int i, int x0, int x1, int y, int h, bool playing) 
     return;
   }
   if (e->done) {  // a check mark
-    uint16_t c = playing ? C_WHITE : C_GREEN;
+    uint16_t c = playing ? C_PURE : C_GREEN;
     d.drawWideLine(x1 - 14, y + h / 2, x1 - 9, y + h / 2 + 5, 2.5f, c);
     d.drawWideLine(x1 - 9, y + h / 2 + 5, x1, y + h / 2 - 5, 2.5f, c);
     return;
@@ -3471,7 +3485,7 @@ static void drawTrackRows() {
       String f = viewTracks[i].substring(viewTracks[i].lastIndexOf('/') + 1);
       static const char* MON[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
       int mon = f.length() > 10 && f[4] == '-' ? f.substring(5, 7).toInt() : 0;
-      d.fillRoundRect(tlX() + 4, y + 4, 40, h - 8, 8, playing ? C_WHITE : C_OFF);
+      d.fillRoundRect(tlX() + 4, y + 4, 40, h - 8, 8, playing ? C_PURE : C_OFF);
       d.setTextDatum(middle_center);
       d.setTextColor(playing ? ac : C_WHITE);
       if (mon >= 1 && mon <= 12) {
@@ -3488,13 +3502,13 @@ static void drawTrackRows() {
       auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
       int lh = 16, ty = my - (int)(lines.size() - 1) * lh / 2;
       d.setTextDatum(middle_left);
-      d.setTextColor(C_WHITE);
+      d.setTextColor(playing ? C_PURE : C_WHITE);
       for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
       drawProgressMark(i, tx, tlX() + tlW() - 8, y, h, playing);
       continue;
     }
     int nx = tlX() + 17;
-    d.fillCircle(nx, my, 12, playing ? C_WHITE : C_OFF);
+    d.fillCircle(nx, my, 12, playing ? C_PURE : C_OFF);
     if (playing) iconPlaying(nx, my, ac);
     else {
       if (n > 99) d.setFont(&fonts::DejaVu12);
@@ -3506,7 +3520,7 @@ static void drawTrackRows() {
     int tx = tlX() + 42, tw = tlW() - 42 - (isResumable(viewAlbum) ? 26 : 14);
     d.setFont(&fonts::FreeSansBold9pt7b);  // one size for every title; long ones take two lines
     d.setTextDatum(middle_left);
-    d.setTextColor(C_WHITE);
+    d.setTextColor(playing ? C_PURE : C_WHITE);
     auto lines = wrapText(trackTitle(viewTracks[i], viewAlbum), tw, 2);
     int lh = 16, ty = my - (int)(lines.size() - 1) * lh / 2;
     for (size_t k = 0; k < lines.size(); k++) d.drawString(lines[k], tx, ty + k * lh);
@@ -3595,7 +3609,7 @@ static const uint8_t BRIGHTNESS[3] = {60, 140, 230};
 static const uint16_t AUTO_OFF_MIN[3] = {15, 30, 0};  // 0 = never
 
 static constexpr int GU_TABS_Y = 40, GU_TAB_H = 28, GU_BODY_Y = 76;
-static constexpr int SEG_X = 118, SEG_W = 194, SEG_H = 26;  // settings: 3-way choices on the right
+static constexpr int SEG_X = 92, SEG_W = 220, SEG_H = 26;  // settings: 3-way choices on the right
 static constexpr int GU_ROWS = 3, STATS_PAGES = 3;
 static const int GU_ROW_Y[GU_ROWS] = {80, 112, 144};
 static constexpr int GU_THEME_Y = 176;  // Colors: < name >, a tap on either half steps through
@@ -3609,7 +3623,7 @@ static void drawSegments(int x, int y, int w, int h, const char* const* labels, 
   d.setTextDatum(middle_center);
   for (int i = 0; i < n; i++) {
     if (i == sel) d.fillRoundRect(x + i * sw + 2, y + 2, sw - 4, h - 4, (h - 4) / 2, on);
-    d.setTextColor(i == sel ? C_WHITE : C_DIM);
+    d.setTextColor(i == sel ? C_SHELF_INK : C_DIM);  // the picked one sits on a shelf color
     d.drawString(labels[i], x + i * sw + sw / 2, y + h / 2 + 1);
   }
 }
@@ -4230,6 +4244,8 @@ static void handleIdle() {
 //   NAME [<name>]        -> sets (or, empty, clears) the owner's name, "OK"
 //   LOAD <album>         -> loads the first album whose name contains <album> (paused), "OK"
 //   SHOW <screen>        -> home | albums [<shelf>] | songs | player | grownups, "OK"
+//   THEME [<name>]       -> switches to that color theme (kept, like Settings -> Colors), "OK";
+//                           alone: "THEME <current> <all names>"
 //   SHOT                 -> "SHOT 320 240", the screen as raw RGB565 rows, then "END"
 //                           (LOAD, SHOW and SHOT are for screenshot.py)
 //   COVERS               -> per album "C <folder>\t<cover in use>", then one
@@ -4399,6 +4415,24 @@ static void handleSerial() {
     else if (what == "grownups") { guTab = 0; beforeGrownups = screen; showScreen(Screen::Grownups); }
     else { Serial.println("ERR bad screen"); return; }
     Serial.println("OK");
+  } else if (line == "THEME" || line.startsWith("THEME ")) {
+    String want = lowerStr(line.substring(5));
+    want.trim();
+    if (!want.length()) {
+      Serial.printf("THEME %s", THEMES[themeIdx].name);
+      for (auto& t : THEMES) Serial.printf(" %s", t.name);
+      Serial.println();
+      return;
+    }
+    for (int k = 0; k < THEME_COUNT; k++)
+      if (lowerStr(THEMES[k].name) == want) {
+        themeIdx = k;
+        prefs.putUChar("theme", k);
+        dirtyAll = true;
+        Serial.println("OK");
+        return;
+      }
+    Serial.println("ERR no such theme");
   } else if (line == "COVERS") {  // which picture each album uses, and how big they all are
     for (auto& al : albums) {
       Serial.printf("C %s\t%s\n", al.path.c_str(), al.coverFile.length() ? al.coverFile.c_str() : al.artFile.length() ? "(in the songs' tags)" : "(none)");
