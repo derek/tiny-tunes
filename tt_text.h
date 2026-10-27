@@ -1,6 +1,6 @@
 // Text and tag helpers for Tiny Tunes: title clean-up, ASCII folding, and the ID3v2 tag
 // reader. Pure functions on Arduino Strings (no SD card, no display), kept apart from
-// tiny-tunes.ino so test/ can compile and test them on a computer.
+// the sketch so test/ can compile and test them on a computer.
 #pragma once
 
 #include <algorithm>

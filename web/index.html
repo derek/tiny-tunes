@@ -1,0 +1,520 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Tiny Tunes</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #fff;
+      --fg: #111;
+      --dim: #777;
+      --acc: #0a9;
+      --row: #f0f0f0;
+      --line: #ddd;
+      --warn: #c33
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111;
+        --fg: #eee;
+        --dim: #999;
+        --row: #1d1d1d;
+        --line: #333;
+        --warn: #f66
+      }
+    }
+    body {
+      font: 16px system-ui;
+      margin: 0 auto;
+      max-width: 640px;
+      padding: 16px;
+      background: var(--bg);
+      color: var(--fg)
+    }
+    h1 { font-size: 22px; margin: 0 0 8px }
+    h2 { font-size: 17px; margin: 24px 0 8px }
+    button { font: inherit; padding: 6px 12px; cursor: pointer }
+    .ctl { display: flex; gap: 8px; margin: 10px 0 }
+    .ctl button { flex: 1; padding: 12px; font-size: 18px }
+    input[type=text] { width: 100%; box-sizing: border-box; padding: 8px; font-size: 16px }
+    #drop { border: 2px dashed var(--dim); border-radius: 8px; padding: 18px; text-align: center; margin: 8px 0 }
+    #drop.over { border-color: var(--acc) }
+    .dim { color: var(--dim); font-size: 14px }
+    .warn { color: var(--warn) }
+    progress { width: 100% }
+    details { border: 1px solid var(--line); border-radius: 8px; margin: 8px 0 }
+    summary { display: flex; align-items: center; gap: 10px; padding: 8px; cursor: pointer }
+    summary img, summary .nocover {
+      width: 44px;
+      height: 44px;
+      border-radius: 6px;
+      object-fit: cover;
+      background: var(--row);
+      flex: none
+    }
+    summary b { flex: 1 }
+    .cur > summary { background: var(--row) }
+    .abtn { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 8px 8px }
+    .trk { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-top: 1px solid var(--line) }
+    .trk .t { flex: 1; min-width: 0 }
+    .trk .t div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .trk.playing .t > div:first-child { color: var(--acc); font-weight: 600 }
+    .trk select { max-width: 130px }
+    .icon { padding: 4px 8px }
+    #plan label { display: flex; gap: 8px; padding: 4px 0; align-items: flex-start }
+    #plan code { font-size: 13px }
+  </style>
+</head>
+<body>
+  <h1 id="title">Tiny Tunes</h1>
+  <div id="now" class="dim">...</div>
+  <div class="ctl">
+    <button onclick="cmd('prev')">&#9198;</button>
+    <button onclick="cmd('play')">&#9199;</button>
+    <button onclick="cmd('next')">&#9197;</button>
+  </div>
+  <div class="ctl">
+    <button onclick="cmd('voldown')">Vol &minus;</button>
+    <button onclick="cmd('volup')">Vol +</button>
+  </div>
+
+  <h2>Add music or books</h2>
+  <div class="ctl">
+    <select id="shelf" onchange="fillAlbumList()" style="flex:1"></select>
+    <input type="text" id="album" list="albumlist" placeholder="Album or book name" style="flex:3">
+  </div>
+  <datalist id="albumlist"></datalist>
+  <div id="drop">Drop MP3s and a cover picture here, or <input type="file" id="pick" multiple accept=".mp3,audio/mpeg,image/*"></div>
+  <progress id="prog" value="0" max="1" hidden></progress>
+  <div id="msg" class="dim"></div>
+
+  <h2>Library</h2>
+  <div class="ctl">
+    <button onclick="planCleanup()">&#10024; Clean up</button>
+    <button onclick="newAlbum()">+ New album</button>
+  </div>
+  <div id="plan"></div>
+  <div id="lib" class="dim">Loading...</div>
+
+  <h2>Podcasts</h2>
+  <div class="dim">
+    Paste a show's RSS feed or its Apple Podcasts link. New episodes download every night after
+    midnight while the Tiny Tunes is plugged in (it switches to WiFi and back on its own), and also soon after
+    WiFi mode connects. They play like albums in Bluetooth mode.
+  </div>
+  <div class="ctl">
+    <input type="text" id="feedurl" placeholder="https://... feed or Apple Podcasts link" style="flex:3">
+    <select id="feedkeep" title="Episodes to keep">
+      <option value="3">Keep 3</option>
+      <option value="5" selected>Keep 5</option>
+      <option value="10">Keep 10</option>
+    </select>
+    <button onclick="addFeed()" style="flex:1">Add</button>
+  </div>
+  <div class="ctl">
+    <button onclick="syncNow()">&#8635; Sync now</button>
+    <button id="syncstop" onclick="stopSync()" hidden>&#9632; Stop</button>
+  </div>
+  <div id="syncline" class="dim"></div>
+  <progress id="syncprog" value="0" max="100" hidden></progress>
+  <div id="pods"></div>
+
+  <h2>Settings</h2>
+  <div class="ctl">
+    <input type="text" id="owner" maxlength="16" placeholder="Whose Tiny Tunes is this? (first name)" style="flex:3">
+    <button onclick="saveOwner()" style="flex:1">Save</button>
+  </div>
+  <div class="dim" id="hostline"></div>
+
+  <div class="ctl" style="margin-top:28px">
+    <button onclick="if(confirm('Reboot into Bluetooth mode? This page stops working until you switch back.'))cmd('btmode')">Switch to Bluetooth mode</button>
+  </div>
+  <p class="dim" id="ver" style="text-align:center"></p>
+
+<script>
+const $ = id => document.getElementById(id), q = encodeURIComponent;
+let lib = {root: '/', albums: []};
+const say = t => $('msg').textContent = t;
+const post = async (u) => {
+  const r = await fetch(u, {method: 'POST'});
+  if (!r.ok) throw new Error(await r.text() || r.status);
+  return r
+};
+const safe = s => s.normalize('NFKD').replace(/[^\x20-\x7e]/g, '').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+const dirOf = p => p.slice(0, p.lastIndexOf('/')) || '/', join = (d, n) => (d == '/' ? '' : d) + '/' + n;
+function esc(s) {
+  return s.replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]))
+}
+
+let ownerShown = null;
+async function refreshNow() {
+  const s = await (await fetch('/state')).json();
+  if (s.version) $('ver').textContent = 'Tiny Tunes ' + s.version;
+  if (s.owner !== ownerShown) {
+    ownerShown = s.owner;
+    const t = s.owner ? s.owner + "'s Tiny Tunes" : 'Tiny Tunes';
+    document.title = t;
+    $('title').textContent = t;
+    if (document.activeElement != $('owner')) $('owner').value = s.owner;
+    $('hostline').textContent = `Also at http://${s.host}.local (the name applies after the next restart).`
+  }
+  $('now').textContent = s.tracks.length
+    ? (s.paused ? 'Paused: ' : 'Playing: ') + (s.tracks[s.current] || '') + ' — ' + s.album + '  (vol ' + s.volume + '%)'
+    : 'Nothing playing';
+  return s
+}
+async function cmd(c) {
+  await post('/cmd?c=' + c);
+  refreshNow();
+  if (/album|track/.test(c)) setTimeout(loadLib, 300)
+}
+async function saveOwner() {
+  await post('/owner?name=' + q($('owner').value.trim()));
+  ownerShown = null;
+  refreshNow()
+}
+
+// ---------- library / organize ----------
+// Where uploads go: Music uses the library root (/music if the card has it); other shelves their folder.
+function shelfDir() { return $('shelf').value }
+function fillShelves() {
+  const cur = $('shelf').value;
+  const opts = [{name: 'Music', path: lib.root}].concat(lib.shelves.filter(sh => sh.kind != 'music' && sh.kind != 'podcasts'));
+  if (!opts.some(o => o.path == '/books')) opts.splice(1, 0, {name: 'Books', path: '/books'});
+  $('shelf').innerHTML = opts.map(o => `<option value="${esc(o.path)}">${esc(o.name)}</option>`).join('');
+  if (cur && opts.some(o => o.path == cur)) $('shelf').value = cur;
+  fillAlbumList()
+}
+function fillAlbumList() {
+  const base = shelfDir();
+  $('albumlist').innerHTML = lib.albums.filter(a => a.folder != base && dirOf(a.folder) == base)
+    .map(a => `<option value="${esc(a.folder.split('/').pop())}">`).join('')
+}
+async function loadLib() {
+  lib = await (await fetch('/library')).json();
+  const s = await refreshNow();
+  const open = new Set([...document.querySelectorAll('#lib details[open]')].map(d => d.dataset.path));
+  fillShelves();
+  $('lib').innerHTML = lib.albums.length ? '' : 'No albums yet.';
+  let lastShelf = -1;
+  lib.albums.forEach((a, ai) => {
+    const sh = lib.shelves[a.shelf] || {name: '', kind: 'music'};
+    if (sh.kind == 'podcasts') return;  // podcasts have their own section below
+    if (a.shelf != lastShelf) {
+      lastShelf = a.shelf;
+      const h = document.createElement('h3');
+      h.textContent = sh.name;
+      h.style.margin = '14px 0 4px';
+      $('lib').appendChild(h)
+    }
+    const d = document.createElement('details');
+    d.dataset.path = a.folder;
+    if (open.has(a.folder)) d.open = true;
+    if (ai == lib.playing) d.className = 'cur';
+    const cover = a.cover || a.art
+      ? `<img loading="lazy" src="/cover?i=${ai}&v=${a.coverSize}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'nocover'}))">`
+      : '<span class="nocover"></span>';
+    const others = lib.albums.map((b, bi) => bi == ai ? '' : `<option value="${bi}">${esc(b.name)}</option>`).join('');
+    d.innerHTML = `<summary>${cover}<b>${esc(a.name)}</b><span class="dim">${a.tracks.length} songs</span></summary>
+      <div class="abtn"><button onclick="cmd('album&i=${ai}')">&#9654; Play</button>
+      ${a.folder==lib.root||a.folder=='/'?'':`<button onclick="renameAlbum(${ai})">Rename</button>`}
+      <label><button onclick="this.nextElementSibling.click()">Cover...</button><input type="file" accept="image/*" hidden onchange="setCover(${ai},this.files[0])"></label>
+      ${a.folder==lib.root||a.folder=='/'?'':`<button class="warn" onclick="delAlbum(${ai})">Delete album</button>`}</div>` +
+      a.tracks.map((t, ti) => `<div class="trk${ai==lib.playing&&ti==s.current?' playing':''}">
+        <button class="icon" title="Play" onclick="cmd('album&i=${ai}');setTimeout(()=>cmd('track&i=${ti}'),400)">&#9654;</button>
+        <div class="t"><div>${esc(t.title)}</div><div class="dim">${esc(t.file)}</div></div>
+        <select onchange="moveTrack(${ai},${ti},this.value)"><option value="">Move to...</option>${others}</select>
+        <button class="icon warn" title="Delete" onclick="delTrack(${ai},${ti})">&#10005;</button></div>`).join('') +
+      (a.other.length ? `<div class="trk dim">Other files: ${a.other.map(esc).join(', ')}</div>` : '');
+    $('lib').appendChild(d)
+  })
+}
+
+async function afterChange(m) {
+  await post('/rescan');
+  say(m || 'Done');
+  await loadLib()
+}
+async function renameAlbum(ai) {
+  const a = lib.albums[ai], n = prompt('New album name', a.name);
+  if (!n || !safe(n)) return;
+  try {
+    await post(`/mv?from=${q(a.folder)}&to=${q(join(dirOf(a.folder),safe(n)))}`);
+    afterChange('Renamed')
+  } catch (e) { alert('Rename failed: ' + e.message) }
+}
+async function delAlbum(ai) {
+  const a = lib.albums[ai];
+  if (!confirm(`Delete "${a.name}" and its ${a.tracks.length} songs from the card?`)) return;
+  try {
+    await post('/rm?path=' + q(a.folder));
+    afterChange('Deleted ' + a.name)
+  } catch (e) { alert('Delete failed: ' + e.message) }
+}
+async function delTrack(ai, ti) {
+  const a = lib.albums[ai], t = a.tracks[ti];
+  if (!confirm(`Delete "${t.title}"?`)) return;
+  try {
+    await post('/rm?path=' + q(join(a.folder, t.file)));
+    afterChange('Deleted ' + t.title)
+  } catch (e) { alert('Delete failed: ' + e.message) }
+}
+async function moveTrack(ai, ti, bi) {
+  if (bi === '') return;
+  const a = lib.albums[ai], b = lib.albums[bi], t = a.tracks[ti];
+  try {
+    await post(`/mv?from=${q(join(a.folder,t.file))}&to=${q(join(b.folder,t.file))}`);
+    afterChange(`Moved ${t.title} to ${b.name}`)
+  } catch (e) { alert('Move failed: ' + e.message) }
+}
+async function newAlbum() {
+  const n = prompt('Album name');
+  if (!n || !safe(n)) return;
+  try {
+    await post('/mkdir?path=' + q(join(shelfDir(), safe(n))));
+    $('album').value = safe(n);
+    say(`Created ${safe(n)}. Drop songs above to fill it.`);
+    loadLib()
+  } catch (e) { alert(e.message) }
+}
+async function setCover(ai, f) {
+  if (!f) return;
+  const a = lib.albums[ai];
+  try {
+    const blob = await shrinkCover(f);
+    if (a.cover) await post('/rm?path=' + q(join(a.folder, a.cover)));
+    await send(blob, 'cover.jpg', a.folder);
+    afterChange('Cover updated')
+  } catch (e) { alert('Cover failed: ' + e) }
+}
+
+// ---------- uploads ----------
+function send(blob, name, dir) {
+  return new Promise((ok, bad) => {
+    const x = new XMLHttpRequest(), fd = new FormData();
+    fd.append('f', blob, name);
+    x.upload.onprogress = e => { $('prog').value = e.loaded / e.total };
+    x.onload = () => x.status == 200 ? ok() : bad(x.responseText);
+    x.onerror = () => bad('network error');
+    x.open('POST', '/upload?dir=' + q(dir));
+    x.send(fd)
+  })
+}
+// covers are shrunk to a 160x160 baseline JPEG so the Core2 can decode them quickly
+function shrinkCover(blob) {
+  return new Promise((ok, bad) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 160;
+      const s = Math.min(img.width, img.height), g = c.getContext('2d');
+      g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 160, 160);
+      URL.revokeObjectURL(img.src);
+      c.toBlob(b => b ? ok(b) : bad('cover'), 'image/jpeg', 0.85)
+    };
+    img.onerror = () => bad('not an image');
+    img.src = URL.createObjectURL(blob)
+  })
+}
+async function upload(files) {
+  const name = safe($('album').value);
+  files = [...files];
+  const dir = name ? join(shelfDir(), name) : shelfDir();
+  const songs = files.filter(f => /\.mp3$/i.test(f.name)), cover = files.find(f => f.type.startsWith('image/'));
+  if (cover && !name) { say('Type an album name to add a cover.'); return }
+  if (!songs.length && !cover) return;
+  $('prog').hidden = false;
+  try {
+    if (cover) { say('Uploading cover'); await send(await shrinkCover(cover), 'cover.jpg', dir) }
+    for (const [i, f] of songs.entries()) {
+      say(`Uploading ${i+1}/${songs.length}: ${f.name}`);
+      await send(f, safe(f.name) || 'song.mp3', dir)
+    }
+  }
+  catch (e) { say('Failed: ' + e); return }
+  $('prog').hidden = true;
+  afterChange(`Added ${songs.length} song(s)` + (cover ? ' and a cover' : ''))
+}
+const d = $('drop');
+d.ondragover = e => { e.preventDefault(); d.classList.add('over') };
+d.ondragleave = () => d.classList.remove('over');
+d.ondrop = e => { e.preventDefault(); d.classList.remove('over'); upload(e.dataTransfer.files) };
+$('pick').onchange = e => upload(e.target.files);
+
+// ---------- clean up ----------
+// Plans fixes from the device's view of the library, shows them as a checklist, then applies the ticked ones.
+function prettyName(n) {
+  if (!n.includes(' ')) n = n.replace(/[-_]+/g, ' ');
+  return n.replace(/(^|\s)[a-z]/g, c => c.toUpperCase())
+}
+function id3Art(buf) {
+  const b = new Uint8Array(buf);
+  if (b[0] != 73 || b[1] != 68 || b[2] != 51 || (b[3] != 3 && b[3] != 4)) return null;
+  const ver = b[3], size = (b[6] << 21) | (b[7] << 14) | (b[8] << 7) | b[9];
+  let p = 10;
+  while (p + 10 <= Math.min(10 + size, b.length)) {
+    const id = String.fromCharCode(b[p], b[p+1], b[p+2], b[p+3]);
+    if (!/^[A-Z0-9]{4}$/.test(id)) break;
+    const fs = ver == 4
+      ? (b[p+4] << 21) | (b[p+5] << 14) | (b[p+6] << 7) | b[p+7]
+      : ((b[p+4] << 24) | (b[p+5] << 16) | (b[p+6] << 8) | b[p+7]) >>> 0;
+    const body = b.subarray(p + 10, p + 10 + fs);
+    p += 10 + fs;
+    if (id != 'APIC' || body.length < 4) continue;
+    const enc = body[0];
+    let i = body.indexOf(0, 1) + 1;
+    const mime = new TextDecoder().decode(body.subarray(1, i - 1));
+    i++;
+    if (enc == 1 || enc == 2) {
+      while (i + 1 < body.length && !(body[i] == 0 && body[i+1] == 0)) i += 2;
+      i += 2
+    } else {
+      while (i < body.length && body[i] != 0) i++;
+      i++
+    }
+    return new Blob([body.subarray(i)], {type: mime || 'image/jpeg'})
+  }
+  return null
+}
+async function planCleanup() {
+  await loadLib();
+  const plan = [];
+  for (const a of lib.albums) {
+    if ((lib.shelves[a.shelf] || {}).kind == 'podcasts') continue;  // managed by the podcast sync
+    const isRoot = a.folder == lib.root || a.folder == '/';
+    // song files -> "Clean Title.mp3" (keeping a leading track number if there was one)
+    const used = new Set(a.tracks.map(t => t.file.toLowerCase())), renames = [];
+    a.tracks.forEach(t => {
+      const num = (t.file.match(/^(\d{1,3})[\s._-]/) || [])[1];
+      let base = safe(t.title) || 'Song', name = (num ? num.padStart(2, '0') + ' ' : '') + base + '.mp3';
+      for (let k = 2; name.toLowerCase() != t.file.toLowerCase() && renames.some(r => r.to.toLowerCase() == name.toLowerCase()); k++)
+        name = (num ? num.padStart(2, '0') + ' ' : '') + base + ' ' + k + '.mp3';
+      if (name != t.file) renames.push({from: t.file, to: name})
+    });
+    if (renames.length) plan.push({
+      on: true,
+      label: `Rename ${renames.length} song file(s) in <b>${esc(a.name)}</b>`,
+      detail: renames.map(r => `<code>${esc(r.from)}</code> &rarr; <code>${esc(r.to)}</code>`).join('<br>'),
+      run: async () => {
+        for (const [i, r] of renames.entries()) await post(`/mv?from=${q(join(a.folder,r.from))}&to=${q(join(a.folder,'~tmp'+i+'.mp3'))}`);
+        for (const [i, r] of renames.entries()) await post(`/mv?from=${q(join(a.folder,'~tmp'+i+'.mp3'))}&to=${q(join(a.folder,r.to))}`)
+      }
+    });
+    // cover.jpg from an image in the folder, or art embedded in the songs
+    // no picture in the folder: make cover.jpg from art embedded in the songs (JPG/PNG covers are used as is)
+    if (!a.cover && !a.art && a.tracks.length) plan.push({
+      on: true,
+      label: `Make a cover for <b>${esc(a.name)}</b> from the art inside its songs`,
+      run: async () => {
+        let blob = null;
+        for (const t of a.tracks.slice(0, 3)) {
+          blob = id3Art(await (await fetch(`/file?path=${q(join(a.folder,t.file))}&n=1500000`)).arrayBuffer());
+          if (blob) break
+        }
+        if (!blob) throw new Error('no art inside the songs');
+        await send(await shrinkCover(blob), 'cover.jpg', a.folder)
+      }
+    });
+    // macOS junk always; other stray files only if ticked
+    const junk = a.other.filter(f => f.startsWith('._') || f == '.DS_Store'),
+      extra = a.other.filter(f => !junk.includes(f) && !f.startsWith('.'));
+    if (junk.length) plan.push({
+      on: true,
+      label: `Delete ${junk.length} Mac junk file(s) in <b>${esc(a.name)}</b>`,
+      detail: junk.map(f => `<code>${esc(f)}</code>`).join(' '),
+      run: async () => { for (const f of junk) await post('/rm?path=' + q(join(a.folder, f))) }
+    });
+    for (const f of extra) plan.push({
+      on: false,
+      label: `Delete <code>${esc(f)}</code> from <b>${esc(a.name)}</b>`,
+      run: () => post('/rm?path=' + q(join(a.folder, f)))
+    });
+    // album folder name last, since it changes the paths above
+    const pretty = safe(prettyName(a.folder.split('/').pop()));
+    if (!isRoot && pretty && pretty != a.folder.split('/').pop()) plan.push({
+      on: true,
+      label: `Rename album <code>${esc(a.folder.split('/').pop())}</code> &rarr; <b>${esc(pretty)}</b>`,
+      run: () => post(`/mv?from=${q(a.folder)}&to=${q(join(dirOf(a.folder),pretty))}`)
+    });
+  }
+  if (!plan.length) { $('plan').innerHTML = '<p class="dim">Everything already looks tidy.</p>'; return }
+  $('plan').innerHTML = `<p>Here's what Clean up would change. Untick anything you want to keep as is.</p>` +
+    plan.map((p, i) => `<label><input type="checkbox" ${p.on?'checked':''} data-i="${i}"><span>${p.label}${p.detail?`<details><summary class="dim">show</summary><div class="dim">${p.detail}</div></details>`:''}</span></label>`).join('') +
+    `<div class="ctl"><button id="apply">Apply</button><button onclick="$('plan').innerHTML=''">Cancel</button></div>`;
+  $('apply').onclick = async () => {
+    const todo = [...$('plan').querySelectorAll('input:checked')].map(c => plan[c.dataset.i]);
+    $('prog').hidden = false;
+    let failed = [];
+    for (const [i, p] of todo.entries()) {
+      $('prog').value = i / todo.length;
+      say(`Cleaning up ${i+1}/${todo.length}...`);
+      try { await p.run() } catch (e) { failed.push(p.label.replace(/<[^>]+>/g, '') + ': ' + e.message) }
+    }
+    $('prog').hidden = true;
+    $('plan').innerHTML = failed.length ? `<p class="warn">Some fixes failed:<br>${failed.map(esc).join('<br>')}</p>` : '';
+    afterChange(`Cleaned up (${todo.length-failed.length} fixes)`)
+  }
+}
+
+// ---------- podcasts ----------
+let podTimer = null;
+const mb = b => (b / 1e6).toFixed(1) + ' MB';
+async function loadPods() {
+  clearTimeout(podTimer);
+  let p;
+  try { p = await (await fetch('/podcasts')).json() } catch (e) { podTimer = setTimeout(loadPods, 10000); return }
+  const busy = p.state != 'idle';
+  $('syncline').innerHTML = esc(p.status) + (p.error ? ` <span class="warn">${esc(p.error)}</span>` : '') +
+    (!busy && p.ago >= 0 ? ` <span class="dim">(checked ${p.ago<1?'just now':p.ago<120?p.ago+' min ago':Math.round(p.ago/60)+' h ago'})</span>` : '');
+  $('syncprog').hidden = !(busy && p.pct >= 0);
+  $('syncprog').value = Math.max(p.pct, 0);
+  $('syncstop').hidden = !busy;
+  const open = new Set([...document.querySelectorAll('#pods details[open]')].map(d => d.dataset.url));
+  $('pods').innerHTML = p.feeds.length ? '' : '<p class="dim">No podcasts yet.</p>';
+  p.feeds.forEach((f, i) => {
+    const d = document.createElement('details');
+    d.dataset.url = f.url;
+    if (open.has(f.url)) d.open = true;
+    const total = f.episodes.reduce((s, e) => s + e.size, 0);
+    d.innerHTML = `<summary><b>${esc(f.name||'New podcast (syncing...)')}</b><span class="dim">${f.episodes.length} ep, ${mb(total)}</span></summary>
+      <div class="abtn"><span class="dim" style="flex-basis:100%;overflow-wrap:anywhere">${esc(f.url)}</span>
+      <select onchange="setKeep(${i},this.value)">${[1,3,5,10,20].map(k=>`<option value="${k}"${k==f.keep?' selected':''}>Keep ${k}</option>`).join('')}</select>
+      <button class="warn" onclick="removeFeed(${i})">Remove podcast</button></div>` +
+      f.episodes.map(e => `<div class="trk"><div class="t"><div>${esc(e.file.replace(/\.mp3$/i,''))}</div><div class="dim">${mb(e.size)}</div></div>
+        <button class="icon warn" title="Delete episode" onclick="delEpisode('${esc(f.folder)}','${esc(e.file).replace(/'/g,"\\'")}')">&#10005;</button></div>`).join('');
+    $('pods').appendChild(d)
+  });
+  podTimer = setTimeout(loadPods, busy ? 2000 : 15000)
+}
+async function addFeed() {
+  const url = $('feedurl').value.trim();
+  if (!url) return;
+  $('syncline').textContent = 'Adding...';
+  const r = await fetch(`/podcast/add?url=${q(url)}&keep=${$('feedkeep').value}`, {method: 'POST'});
+  if (!r.ok) { $('syncline').textContent = 'Could not add: ' + await r.text(); return }
+  $('feedurl').value = '';
+  loadPods()
+}
+async function setKeep(i, k) { await post(`/podcast/keep?i=${i}&keep=${k}`); loadPods() }
+async function removeFeed(i) {
+  if (!confirm('Remove this podcast? Its downloaded episodes are deleted too.')) return;
+  try { await post(`/podcast/remove?i=${i}&files=1`); loadPods(); loadLib() } catch (e) { alert(e.message) }
+}
+async function delEpisode(folder, file) {
+  if (!confirm('Delete this episode? (It may download again on the next sync if it is still one of the newest.)')) return;
+  await post('/rm?path=' + q(join(folder, file)));
+  await post('/rescan');
+  loadPods();
+  loadLib()
+}
+async function syncNow() { await post('/podcast/sync'); setTimeout(loadPods, 500) }
+async function stopSync() { await post('/podcast/stop'); setTimeout(loadPods, 300) }
+
+loadLib();
+loadPods();
+setInterval(refreshNow, 5000);
+</script>
+</body>
+</html>

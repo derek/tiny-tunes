@@ -1,7 +1,6 @@
 # Notes for agents working on Tiny Tunes
 
-Tiny Tunes is a kids' audio player (music, podcasts, audiobooks) for the M5Stack Core2,
-used by a **5-year-old and a 7-year-old**. Keep UI text and controls right for a
+Tiny Tunes is a kids' audio player (music, podcasts, audiobooks) for the M5Stack Core2, targeting 5 to 10 year olds. Keep UI text and controls right for a
 pre-reader through a 2nd grader: pictures over words, big targets. Of the touch
 buttons below the screen only the middle one (Home) does anything alone; two held for
 3 s = grown-ups. See README.md for setup, build
@@ -32,6 +31,13 @@ and the SD card layout.
   (direct I2S PDM instead). After adding code, check the BT build still links.
 - **Arduino auto-prototypes:** structs and enums used in function signatures must
   be declared near the top of `tiny-tunes.ino`, or the build fails.
+- **The sketch is split into numbered `.ino` tabs** (map at the top of
+  `tiny-tunes.ino`). arduino-cli joins them main-first, then by name, into one file, so
+  a tab can only use globals and types from itself or earlier tabs (functions are fine
+  anywhere: they get auto-prototypes). Keep functions in `.ino` tabs, not `.h` files:
+  only `.ino` functions get auto-prototypes.
+- **The web page is `web/index.html`.** `flash.sh` writes it into `tt_web_page.h`
+  (git-ignored) as one string; compiling without `flash.sh` needs that step first.
 - **Serial runs at 460800**: the Core2's USB-serial chip garbles 921600. Opening the
   port resets the device.
 - **Settings namespace** is `core2mp3` (the project's first name). Renaming it would

@@ -2,40 +2,66 @@
 
 A kids' audio player for the [M5Stack Core2](https://docs.m5stack.com/en/core/core2): music,
 audiobooks and podcasts from a microSD card, played on the speaker or Bluetooth headphones.
-Built for a 5- and a 7-year-old: big pictures, few words, no browsing the internet, and
+Built for 5-10 year olds: big pictures, few words, no browsing the internet, and
 everything on it chosen by a grown-up.
 
 | Home | Albums | Songs | Player |
 |---|---|---|---|
 | ![Home: Keep listening, then Pods, Music and Books](docs/screenshots/home.png) | ![Albums: a carousel of covers](docs/screenshots/albums.png) | ![Songs: the album's cover and its songs](docs/screenshots/songs.png) | ![The player](docs/screenshots/player.png) |
 
-## Using it
+## Getting started
 
-- **Home** (the middle touch button below the screen) shows the shelves side by side:
-  Pods (podcasts, with a yellow badge counting the new episodes), Music and Books.
-  Above them, **Keep listening** has whatever was playing last (a long title scrolls):
-  one tap carries on and opens the player.
-- **Albums** are a carousel of covers: swipe left and right, round and round, A to Z.
-  It opens on the album opened or played last. Tap the middle one to open it.
-- **Songs** play when tapped; the list stays put. Tap the song that's playing for the
-  player.
-- **Books** skip the list and open the player where the story left off. Its bar covers the
-  whole book, with a tick between chapters.
-- **The player** has quieter / previous / play / next / louder, and a bar to drag. Swipe
-  for the next or previous track.
-- **Home's top bar** has the owner's name, the time, and on the right headphones (when
-  connected; WiFi mode: a WiFi mark) and the battery (red when low, a bolt when
-  charging).
-- **The top bar** has back on the left, the shelf's name, and on the right the
-  now-playing button: its bars bounce on green while something plays; tap it for the
-  player. Home doesn't have it (Keep listening does that job): leaving Home for a shelf,
-  Keep listening's green button flies up into the corner and becomes it. Past
-  Home the bar is in the shelf's color.
-- **Snackbars** at the bottom say when the battery is low, it's charging, or headphones
-  connect. When headphones disconnect, the sound pauses rather than carrying on out
-  loud.
-- **The power button:** a tap turns the screen off and on (the sound keeps playing);
-  holding it for a second switches Tiny Tunes off.
+**You need:**
+
+- An [M5Stack Core2](https://docs.m5stack.com/en/core/core2) (the original, with the
+  AXP192 power chip; the Core2 v1.1 is untested, and switching off talks to the AXP192
+  directly).
+- A microSD card of 32 GB or less, formatted FAT32 (most cards that size come that way).
+- A Mac with a USB-C cable that carries data. The scripts look for the Core2 at
+  `/dev/cu.usbserial*` or `/dev/cu.wchusbserial*`.
+- Optional: Bluetooth headphones or a speaker, and a WiFi network for podcasts.
+
+**1. Install the tools** (once). `flash.sh` expects `arduino-cli` in `~/.local/bin` and the
+Python tools in `~/.venvs/esp`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=~/.local/bin sh
+~/.local/bin/arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+~/.local/bin/arduino-cli core install esp32:esp32@3.3.12
+~/.local/bin/arduino-cli lib install M5Unified ESP8266Audio
+git clone https://github.com/pschatzmann/ESP32-A2DP ~/Documents/Arduino/libraries/ESP32-A2DP
+python3 -m venv ~/.venvs/esp && ~/.venvs/esp/bin/pip install esptool pyserial mutagen
+```
+
+**2. Get the code and flash it.** Plug in the Core2, then:
+
+```sh
+git clone https://github.com/derek/tiny-tunes.git && cd tiny-tunes
+./flash.sh
+```
+
+That builds both firmwares (Bluetooth and WiFi mode, a few minutes the first time) and
+writes them to the Core2, which then restarts into Bluetooth mode.
+
+**3. Put something on the card.** With the card in the Mac, make a `music` folder and
+copy album folders into it (see [Adding music, books and podcasts](#adding-music-books-and-podcasts)
+for the layout), then put the card in the Core2 and switch it on. Or leave the card in
+the Core2 and send albums over USB:
+
+```sh
+~/.venvs/esp/bin/python upload.py "~/Music/Some Artist - Some Album"
+```
+
+**4. Make it theirs** (optional):
+
+```sh
+~/.venvs/esp/bin/python upload.py --name Ava       # "Hi, Ava!" on the splash screen
+~/.venvs/esp/bin/python upload.py --wifi MyNetwork # WiFi for podcasts and the web page (asks for the password,
+                                                   # then switches to WiFi mode)
+```
+
+To pair headphones, hold two of the touch buttons below the screen for 3 seconds, open
+the Bluetooth tab, put the headphones in pairing mode and tap them in the list.
 
 ## For grown-ups
 
@@ -107,16 +133,8 @@ $PY tags.py apply "/Volumes/NO NAME" tags.csv    # shows what would change, then
 
 ## Building and flashing
 
-Needs [arduino-cli](https://arduino.github.io/arduino-cli/), the Espressif ESP32 core
-(tested with 3.3.12), these libraries, and a Python venv for the tools:
-
-```sh
-arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
-arduino-cli core install esp32:esp32
-arduino-cli lib install M5Unified ESP8266Audio
-git clone https://github.com/pschatzmann/ESP32-A2DP ~/Documents/Arduino/libraries/ESP32-A2DP
-python3 -m venv ~/.venvs/esp && ~/.venvs/esp/bin/pip install esptool pyserial mutagen
-```
+The tools are in [Getting started](#getting-started) (tested with ESP32 core 3.3.12,
+M5Unified 0.2.27 and ESP8266Audio 2.4.1).
 
 ```sh
 ./flash.sh                     # build both firmwares and flash them to the Core2 on USB
@@ -132,8 +150,11 @@ number and commit, e.g. `0.9.3+32.08831bd`.
 
 ## Files
 
-- `tiny-tunes.ino`: the firmware, both modes (`#if CORE2_WIFI`), including the web
-  page and the USB serial protocol (documented above `handleSerial()`).
+- `tiny-tunes.ino` and the numbered `.ino` tabs next to it: the firmware, both modes
+  (`#if CORE2_WIFI`). The map of which tab holds what is at the top of `tiny-tunes.ino`;
+  the USB serial protocol is documented in `70_serial.ino`.
+- `web/index.html`: the WiFi mode web page (HTML, CSS and script). `flash.sh` turns it
+  into `tt_web_page.h` (git-ignored) for the firmware.
 - `tt_text.h`: title clean-up and the ID3 tag reader, kept apart so `test/run.sh` can
   test them on a computer.
 - `upload.py`: uploads, WiFi setup, mode switching, naming.

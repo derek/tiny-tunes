@@ -36,7 +36,7 @@ import uuid
 
 import serial
 
-CHUNK = 2048  # must match UP_CHUNK in tiny-tunes.ino
+CHUNK = 2048  # must match UP_CHUNK in 70_serial.ino
 BAUD = 460800
 COVER_PX = 160
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".heic", ".webp")
