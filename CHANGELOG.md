@@ -6,6 +6,8 @@ e.g. `0.3.0+6.cb61af8`.
 
 ## Unreleased
 
+## 0.13.0 — 2026-10-26
+
 ### Added
 - Two light color themes: Candy (pastels on lavender, dark words, pink play button)
   and Daylight (warm paper background, dark words, bright shelves with white words).
